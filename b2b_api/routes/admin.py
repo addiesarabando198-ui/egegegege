@@ -1,5 +1,5 @@
 """
-Admin API для управления B2B клиентами и API ключами.
+Admin API для управления B2B клиентами, API ключами и биллингом.
 
 POST   /api/v1/admin/clients          - создание клиента
 GET    /api/v1/admin/clients          - список клиентов
@@ -9,6 +9,13 @@ POST   /api/v1/admin/clients/{id}/keys - создание API ключа
 GET    /api/v1/admin/clients/{id}/keys - список ключей клиента
 DELETE /api/v1/admin/keys/{key_id}     - деактивация ключа
 POST   /api/v1/admin/keys/{key_id}/rotate - ротация ключа
+
+Billing:
+POST   /api/v1/admin/clients/{id}/billing/bind-card   - привязка карты
+POST   /api/v1/admin/clients/{id}/billing/charge       - ручное списание
+DELETE /api/v1/admin/clients/{id}/billing               - отмена автосписаний
+GET    /api/v1/admin/clients/{id}/billing/history       - история биллинга
+POST   /api/v1/admin/billing/run                        - запуск биллинга за месяц
 """
 
 import logging
@@ -474,3 +481,145 @@ async def rotate_key(
     except Exception as e:
         logger.error(f"Error rotating key {key_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to rotate key")
+
+
+# ================================================================== #
+#  BILLING ENDPOINTS
+# ================================================================== #
+
+
+@router.post(
+    "/clients/{client_id}/billing/bind-card",
+    summary="Привязать карту клиента",
+    description="Создаёт платёж на 1₽ для привязки карты. Вернёт URL для оплаты.",
+)
+async def bind_card(
+    client_id: str,
+    _: dict = Depends(require_scope("admin")),
+) -> dict:
+    """Инициирует привязку карты для рекуррентных списаний."""
+    from b2b_api.services.billing_service import BillingService
+
+    try:
+        async with aiosqlite.connect(DATABASE_FILE) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT contact_email FROM b2b_clients WHERE client_id = ?",
+                (client_id,),
+            )
+            client = await cursor.fetchone()
+            if not client:
+                raise HTTPException(status_code=404, detail="Client not found")
+
+        billing = BillingService()
+        result = await billing.create_card_binding_payment(
+            client_id=client_id,
+            contact_email=client["contact_email"],
+        )
+
+        if not result["success"]:
+            raise HTTPException(status_code=502, detail=result.get("error"))
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error binding card for {client_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create binding payment")
+
+
+@router.post(
+    "/clients/{client_id}/billing/charge",
+    summary="Ручное списание",
+    description="Принудительно запускает биллинг для клиента за указанный месяц.",
+)
+async def charge_client(
+    client_id: str,
+    year: int = Query(..., ge=2024, le=2030),
+    month: int = Query(..., ge=1, le=12),
+    _: dict = Depends(require_scope("admin")),
+) -> dict:
+    """Ручной запуск биллинга для конкретного клиента."""
+    from b2b_api.services.billing_service import BillingService
+
+    try:
+        billing = BillingService()
+        result = await billing.bill_client(client_id, year, month)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error charging {client_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Billing failed")
+
+
+@router.delete(
+    "/clients/{client_id}/billing",
+    summary="Отменить автосписания",
+    description="Отключает рекуррентные платежи для клиента.",
+)
+async def cancel_billing(
+    client_id: str,
+    _: dict = Depends(require_scope("admin")),
+) -> dict:
+    """Отменяет автосписания для клиента."""
+    from b2b_api.services.billing_service import BillingService
+
+    try:
+        billing = BillingService()
+        return await billing.cancel_billing(client_id)
+    except Exception as e:
+        logger.error(f"Error cancelling billing for {client_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to cancel billing")
+
+
+@router.get(
+    "/clients/{client_id}/billing/history",
+    summary="История биллинга клиента",
+)
+async def billing_history(
+    client_id: str,
+    limit: int = Query(12, ge=1, le=36),
+    _: dict = Depends(require_scope("admin")),
+) -> dict:
+    """Возвращает историю биллинга клиента."""
+    from b2b_api.services.billing_service import BillingService
+
+    try:
+        billing = BillingService()
+        records = await billing.get_billing_history(client_id, limit)
+        return {"client_id": client_id, "records": records}
+    except Exception as e:
+        logger.error(f"Error getting billing history for {client_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get billing history")
+
+
+@router.post(
+    "/billing/run",
+    summary="Запустить биллинг за месяц",
+    description="Запускает биллинг всех активных клиентов за указанный месяц.",
+)
+async def run_billing(
+    year: int = Query(..., ge=2024, le=2030),
+    month: int = Query(..., ge=1, le=12),
+    _: dict = Depends(require_scope("admin")),
+) -> dict:
+    """Запускает биллинг всех активных клиентов."""
+    from b2b_api.services.billing_service import BillingService
+
+    try:
+        billing = BillingService()
+        results = await billing.bill_all_clients(year, month)
+        successful = sum(1 for r in results if r.get("payment", {}).get("success"))
+        return {
+            "year": year,
+            "month": month,
+            "total_clients": len(results),
+            "successful": successful,
+            "failed": len(results) - successful,
+            "details": results,
+        }
+    except Exception as e:
+        logger.error(f"Error running billing: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Billing run failed")

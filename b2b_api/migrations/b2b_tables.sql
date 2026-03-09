@@ -34,6 +34,11 @@ CREATE TABLE IF NOT EXISTS b2b_clients (
     last_daily_reset TEXT,
     last_monthly_reset TEXT,
 
+    -- Биллинг
+    rebill_id TEXT,                   -- RebillId от Tinkoff для рекуррентных списаний
+    billing_active INTEGER DEFAULT 0, -- Флаг активного автосписания
+    billing_order_id TEXT,            -- order_id последнего платежа привязки карты
+
     -- Примечания (для админов)
     notes TEXT,
 

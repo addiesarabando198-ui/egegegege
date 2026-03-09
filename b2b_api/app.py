@@ -179,6 +179,10 @@ async def lifespan(app: FastAPI):
     # Запускаем scheduler сброса счётчиков
     counter_task = asyncio.create_task(counter_reset_scheduler())
 
+    # Запускаем scheduler биллинга
+    from b2b_api.services.billing_scheduler import start_billing_scheduler
+    billing_task = start_billing_scheduler()
+
     logger.info("B2B API ready")
 
     yield
@@ -186,8 +190,13 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("B2B API shutting down...")
     counter_task.cancel()
+    billing_task.cancel()
     try:
         await counter_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await billing_task
     except asyncio.CancelledError:
         pass
     await api_logger.stop()
