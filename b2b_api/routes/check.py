@@ -190,6 +190,24 @@ async def process_check(check_id: str, request: CheckRequest, client_id: str):
 
         logger.info(f"Check {check_id} completed: score={result.total_score}/{result.max_score}, time={processing_time_ms}ms")
 
+        # Отправляем webhook если указан callback_url
+        if request.callback_url:
+            from b2b_api.services.webhook_delivery import deliver_webhook
+            asyncio.create_task(deliver_webhook(
+                check_id=check_id,
+                client_id=client_id,
+                callback_url=request.callback_url,
+                result_data={
+                    "check_id": check_id,
+                    "status": "completed",
+                    "total_score": result.total_score,
+                    "max_score": result.max_score,
+                    "feedback": result.feedback,
+                    "processing_time_ms": processing_time_ms,
+                    "external_id": request.external_id,
+                },
+            ))
+
     except Exception as e:
         logger.error(f"Error processing check {check_id}: {e}", exc_info=True)
 

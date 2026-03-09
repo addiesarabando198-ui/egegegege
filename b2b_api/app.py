@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from b2b_api.routes import check_router, questions_router, client_router
+from b2b_api.routes import check_router, questions_router, client_router, admin_router
 from b2b_api.middleware.rate_limiter import RateLimitMiddleware, get_rate_limiter, RateLimitExceeded
 from b2b_api.services.api_logger import APILoggingMiddleware, get_api_logger
 from core.config import DEBUG
@@ -301,6 +301,11 @@ app.include_router(
 
 app.include_router(
     client_router,
+    prefix="/api/v1"
+)
+
+app.include_router(
+    admin_router,
     prefix="/api/v1"
 )
 

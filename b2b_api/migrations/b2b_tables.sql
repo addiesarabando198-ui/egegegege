@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS b2b_checks (
     -- Метаданные клиента
     external_id TEXT,           -- ID в системе клиента
     callback_url TEXT,          -- URL для webhook
+    idempotency_key TEXT,       -- Ключ идемпотентности
     metadata TEXT,              -- JSON с доп. данными клиента
 
     -- Ошибки
@@ -136,6 +137,7 @@ CREATE INDEX IF NOT EXISTS idx_b2b_checks_status ON b2b_checks(status);
 CREATE INDEX IF NOT EXISTS idx_b2b_checks_created ON b2b_checks(created_at);
 CREATE INDEX IF NOT EXISTS idx_b2b_checks_external ON b2b_checks(client_id, external_id);
 CREATE INDEX IF NOT EXISTS idx_b2b_checks_task ON b2b_checks(task_number);
+CREATE INDEX IF NOT EXISTS idx_b2b_checks_idempotency ON b2b_checks(client_id, idempotency_key);
 
 
 -- ============================================================
