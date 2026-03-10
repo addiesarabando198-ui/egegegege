@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def _safe_html_truncate(text: str, max_len: int) -> str:
-    """Truncate text to max_len, closing any open HTML tags to avoid parse errors."""
+    """Truncate text to max_len, ensuring valid HTML for Telegram."""
     if len(text) <= max_len:
         return text
     truncated = text[:max_len]
@@ -27,20 +27,28 @@ def _safe_html_truncate(text: str, max_len: int) -> str:
     if last_open != -1 and '>' not in truncated[last_open:]:
         truncated = truncated[:last_open]
     truncated += "…"
-    # Close any open tags
-    open_tags = re.findall(r'<(\w+)(?:\s[^>]*)?>', truncated)
-    close_tags = re.findall(r'</(\w+)>', truncated)
-    # Build stack of unclosed tags
+    # Properly track open/close tags with a stack
     stack = []
-    for tag in open_tags:
-        stack.append(tag)
-    for tag in close_tags:
-        if stack and stack[-1] == tag:
-            stack.pop()
+    for m in re.finditer(r'<(/?)(\w+)[^>]*>', truncated):
+        is_close = m.group(1) == '/'
+        tag = m.group(2).lower()
+        if is_close:
+            # Remove the matching open tag from stack (search from end)
+            for j in range(len(stack) - 1, -1, -1):
+                if stack[j] == tag:
+                    stack.pop(j)
+                    break
+        else:
+            stack.append(tag)
     # Close remaining open tags in reverse order
     for tag in reversed(stack):
         truncated += f"</{tag}>"
     return truncated
+
+
+def _strip_html(text: str) -> str:
+    """Strip HTML tags from text."""
+    return re.sub(r'<[^>]+>', '', text)
 
 
 # ============================================
@@ -612,7 +620,7 @@ async def _run_single_check(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         footer = f"\n\n💡 Осталось проверок: {quota.remaining_checks}"
 
         # Telegram limit is 4096 chars; trim ai_feedback if needed
-        max_feedback_len = 4096 - len(header) - len(footer) - 50  # запас на разметку
+        max_feedback_len = 4096 - len(header) - len(footer) - 100
         if len(ai_feedback) > max_feedback_len:
             ai_feedback = _safe_html_truncate(ai_feedback, max_feedback_len)
 
@@ -625,7 +633,13 @@ async def _run_single_check(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         ]
 
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await checking_msg.edit_text(text, reply_markup=reply_markup, parse_mode='HTML')
+        try:
+            await checking_msg.edit_text(text, reply_markup=reply_markup, parse_mode='HTML')
+        except Exception as html_err:
+            # Fallback: strip HTML if Telegram can't parse it
+            logger.warning(f"HTML parse failed, falling back to plain text: {html_err}")
+            plain = _strip_html(text)[:4096]
+            await checking_msg.edit_text(plain, reply_markup=reply_markup)
 
         # Очищаем контекст
         context.user_data.pop('qc_task_type', None)
@@ -1120,10 +1134,10 @@ async def run_bulk_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         parse_mode='HTML'
                     )
             except Exception as e:
-                logger.error(f"Error sending feedback for work {i + 1}: {e}")
-                # Фолбэк: отправляем без форматирования
+                logger.warning(f"HTML send failed for work {i + 1}, falling back to plain text: {e}")
+                # Фолбэк: отправляем без форматирования, strip HTML
                 try:
-                    fallback_text = f"Работа {i + 1}/{len(entries)}\n\n{trimmed_feedback}"
+                    fallback_text = f"Работа {i + 1}/{len(entries)}\n\n{_strip_html(trimmed_feedback)}"
                     await bot.send_message(
                         chat_id=chat_id,
                         text=fallback_text[:4096]
