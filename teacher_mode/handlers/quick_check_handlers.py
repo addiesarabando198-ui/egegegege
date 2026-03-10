@@ -576,14 +576,20 @@ async def _run_single_check(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         answer_escaped = html_module.escape(answer[:200])
         condition_escaped = html_module.escape(condition[:200])
 
-        text = (
+        header = (
             f"<b>🔍 Быстрая проверка</b>\n\n"
             f"<b>Тип задания:</b> {task_type.value}\n\n"
             f"<b>Условие:</b>\n{condition_escaped}{'...' if len(condition) > 200 else ''}\n\n"
             f"<b>Ответ ученика:</b>\n<code>{answer_escaped}</code>\n\n"
-            f"{ai_feedback}\n\n"
-            f"💡 Осталось проверок: {quota.remaining_checks}"
         )
+        footer = f"\n\n💡 Осталось проверок: {quota.remaining_checks}"
+
+        # Telegram limit is 4096 chars; trim ai_feedback if needed
+        max_feedback_len = 4096 - len(header) - len(footer) - 50  # запас на разметку
+        if len(ai_feedback) > max_feedback_len:
+            ai_feedback = ai_feedback[:max_feedback_len] + "…"
+
+        text = header + ai_feedback + footer
 
         keyboard = [
             [InlineKeyboardButton("✅ Проверить еще", callback_data="qc_check_single")],
@@ -1044,13 +1050,16 @@ async def run_bulk_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
             # Формируем полный фидбэк для этой работы (как в одиночной проверке)
             answer_escaped = html_module.escape(answer_text[:300])
-            feedback_text = (
+            feedback_header = (
                 f"<b>🔍 Работа {i + 1}/{len(entries)}</b>\n\n"
                 f"<b>Тип задания:</b> {task_type.value}\n\n"
                 f"<b>Ответ ученика:</b>\n<code>{answer_escaped}</code>"
                 f"{'...' if len(answer_text) > 300 else ''}\n\n"
-                f"{ai_feedback}"
             )
+            # Telegram limit is 4096 chars; trim ai_feedback if needed
+            max_fb_len = 4096 - len(feedback_header) - 50
+            trimmed_feedback = ai_feedback[:max_fb_len] + "…" if len(ai_feedback) > max_fb_len else ai_feedback
+            feedback_text = feedback_header + trimmed_feedback
 
             # Отправляем фидбэк: с фото если есть, иначе текстом
             try:
@@ -1087,9 +1096,10 @@ async def run_bulk_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 logger.error(f"Error sending feedback for work {i + 1}: {e}")
                 # Фолбэк: отправляем без форматирования
                 try:
+                    fallback_text = f"Работа {i + 1}/{len(entries)}\n\n{trimmed_feedback}"
                     await bot.send_message(
                         chat_id=chat_id,
-                        text=f"Работа {i + 1}/{len(entries)}\n\n{ai_feedback}"
+                        text=fallback_text[:4096]
                     )
                 except Exception:
                     pass
