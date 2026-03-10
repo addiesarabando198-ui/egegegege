@@ -4,6 +4,7 @@
 Функционал для онлайн-школ: проверка работ, не назначенных через бота.
 """
 
+import re
 import logging
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler
@@ -14,6 +15,32 @@ from ..services import quick_check_service
 from ..utils.rate_limiter import check_operation_limit
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_html_truncate(text: str, max_len: int) -> str:
+    """Truncate text to max_len, closing any open HTML tags to avoid parse errors."""
+    if len(text) <= max_len:
+        return text
+    truncated = text[:max_len]
+    # Remove any partially-cut tag at the end (e.g. "<b" or "</b")
+    last_open = truncated.rfind('<')
+    if last_open != -1 and '>' not in truncated[last_open:]:
+        truncated = truncated[:last_open]
+    truncated += "…"
+    # Close any open tags
+    open_tags = re.findall(r'<(\w+)(?:\s[^>]*)?>', truncated)
+    close_tags = re.findall(r'</(\w+)>', truncated)
+    # Build stack of unclosed tags
+    stack = []
+    for tag in open_tags:
+        stack.append(tag)
+    for tag in close_tags:
+        if stack and stack[-1] == tag:
+            stack.pop()
+    # Close remaining open tags in reverse order
+    for tag in reversed(stack):
+        truncated += f"</{tag}>"
+    return truncated
 
 
 # ============================================
@@ -587,7 +614,7 @@ async def _run_single_check(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         # Telegram limit is 4096 chars; trim ai_feedback if needed
         max_feedback_len = 4096 - len(header) - len(footer) - 50  # запас на разметку
         if len(ai_feedback) > max_feedback_len:
-            ai_feedback = ai_feedback[:max_feedback_len] + "…"
+            ai_feedback = _safe_html_truncate(ai_feedback, max_feedback_len)
 
         text = header + ai_feedback + footer
 
@@ -1058,7 +1085,7 @@ async def run_bulk_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
             # Telegram limit is 4096 chars; trim ai_feedback if needed
             max_fb_len = 4096 - len(feedback_header) - 50
-            trimmed_feedback = ai_feedback[:max_fb_len] + "…" if len(ai_feedback) > max_fb_len else ai_feedback
+            trimmed_feedback = _safe_html_truncate(ai_feedback, max_fb_len) if len(ai_feedback) > max_fb_len else ai_feedback
             feedback_text = feedback_header + trimmed_feedback
 
             # Отправляем фидбэк: с фото если есть, иначе текстом
