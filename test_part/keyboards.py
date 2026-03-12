@@ -1,8 +1,8 @@
-# test_part/keyboards.py (исправленная версия)
-
+# test_part/keyboards.py
 from typing import List, Optional
 import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from core.universal_ui import AdaptiveKeyboards, UniversalUIComponents
 
 # Импортируем общие утилиты
 from .utils import TestPartCallbackData as CallbackData
@@ -23,16 +23,28 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     ])
 
 def get_initial_choice_keyboard() -> InlineKeyboardMarkup:
-    """Стартовая клавиатура: выбираем, как задавать вопросы."""
+    """Основная клавиатура выбора режима."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔢 По номеру ЕГЭ", callback_data="initial:select_exam_num_mode")],
-        [InlineKeyboardButton("📚 По блоку тем", callback_data="initial:select_block_mode")],
-        [InlineKeyboardButton("🎲 Случайные вопросы (все)", callback_data="initial:select_random_all")],
-        [InlineKeyboardButton("🔧 Работа над ошибками", callback_data="initial:select_mistakes_mode")],
+        [InlineKeyboardButton("🎯 Режим экзамена (1-16)", callback_data="initial:exam_mode")],  # НОВАЯ КНОПКА
+        [InlineKeyboardButton("📝 По номеру задания", callback_data="initial:select_exam_num")],
+        [InlineKeyboardButton("📚 По блокам тем", callback_data="initial:select_block")],
+        [InlineKeyboardButton("🎲 Случайные вопросы", callback_data="initial:select_random_all")],
+        [InlineKeyboardButton("🔧 Работа над ошибками", callback_data="test_mistakes")],
+        [InlineKeyboardButton("📊 Мой прогресс", callback_data="test_part_progress")],
         [InlineKeyboardButton("🏠 Главное меню", callback_data="to_main_menu")]
     ])
 
+def get_exam_results_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура для результатов экзамена."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Подробный разбор", callback_data="exam_detailed_review")],
+        [InlineKeyboardButton("🔄 Пройти экзамен снова", callback_data="initial:exam_mode")],
+        [InlineKeyboardButton("🔧 Работа над ошибками", callback_data="test_mistakes")],
+        [InlineKeyboardButton("🔙 К выбору режима", callback_data="to_test_part_menu")]
+    ])
+
 def get_blocks_keyboard(blocks: List[str]) -> Optional[InlineKeyboardMarkup]:
+    """Создает клавиатуру для выбора блока."""
     if not blocks:
         return None
     
@@ -94,7 +106,7 @@ def get_topics_keyboard(block_name: str, topics: List[str]) -> Optional[InlineKe
     
     return InlineKeyboardMarkup(buttons)
 
-def get_exam_number_keyboard(numbers: List[int]) -> Optional[InlineKeyboardMarkup]:
+def get_exam_num_keyboard(numbers: List[int]) -> Optional[InlineKeyboardMarkup]:
     """Создает клавиатуру для выбора номера задания ЕГЭ."""
     if not numbers:
         return None
@@ -134,29 +146,62 @@ def get_exam_number_keyboard(numbers: List[int]) -> Optional[InlineKeyboardMarku
 
 def get_after_answer_keyboard(last_mode: str = "random") -> InlineKeyboardMarkup:
     """Клавиатура после проверки ответа."""
-    
+    # Определяем текст для кнопки "следующий"
     if last_mode == "topic":
-        main_button = InlineKeyboardButton("➡️ Ещё вопрос по теме", callback_data=CallbackData.NEXT_TOPIC)
+        main_button = InlineKeyboardButton("➡️ Ещё вопрос по теме", callback_data=CallbackData.TEST_NEXT_TOPIC)
     elif last_mode == "exam_num":
-        main_button = InlineKeyboardButton("➡️ Следующий номер", callback_data=CallbackData.NEXT_RANDOM)
+        main_button = InlineKeyboardButton("➡️ Следующий номер", callback_data=CallbackData.TEST_NEXT_RANDOM)
     else:  # random
-        main_button = InlineKeyboardButton("➡️ Ещё случайный", callback_data=CallbackData.NEXT_RANDOM)
+        main_button = InlineKeyboardButton("➡️ Ещё случайный", callback_data=CallbackData.TEST_NEXT_RANDOM)
 
     return InlineKeyboardMarkup([
         [main_button],
-        [InlineKeyboardButton("🔄 Сменить тему / режим", callback_data=CallbackData.CHANGE_TOPIC)],
-        [InlineKeyboardButton("🏠 Главное меню", callback_data=CallbackData.TO_MAIN_MENU)],
+        [InlineKeyboardButton("🔄 Сменить тему / режим", callback_data=CallbackData.TEST_CHANGE_TOPIC)],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data=CallbackData.TEST_TO_MAIN_MENU)],
+    ])
+
+def get_exam_question_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура для вопроса в режиме экзамена."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⏭️ Пропустить вопрос", callback_data="exam_skip_question"),
+            InlineKeyboardButton("❌ Прервать экзамен", callback_data="exam_abort")
+        ]
     ])
 
 def get_mistakes_nav_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура навигации по ошибкам."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➡️ Следующая ошибка", callback_data=CallbackData.NEXT_MISTAKE)],
-        [InlineKeyboardButton("⏩ Пропустить", callback_data=CallbackData.SKIP_MISTAKE)],
-        [InlineKeyboardButton("🚪 Закончить разбор", callback_data=CallbackData.EXIT_MISTAKES)],
-        [InlineKeyboardButton("🏠 Главное меню", callback_data=CallbackData.TO_MAIN_MENU)],
+        [
+            InlineKeyboardButton(
+                "➡️ Следующая ошибка",
+                callback_data="test_next_continue",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "⏩ Пропустить",
+                callback_data="skip_mistake",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🚪 Закончить разбор",
+                callback_data="test_mistake_finish",
+            )
+        ],
+        [
+            InlineKeyboardButton("🏠 Главное меню", callback_data="to_main_menu")
+        ],
     ])
 
-def get_next_action_keyboard(last_mode: str, has_explanation: bool = False) -> InlineKeyboardMarkup:
+def get_question_keyboard(mode: str) -> InlineKeyboardMarkup:
+    """Клавиатура для активного вопроса с кнопкой пропуска."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏭️ Пропустить вопрос", callback_data=f"skip_question:{mode}")]
+    ])
+
+def get_next_action_keyboard(last_mode: str, has_explanation: bool = False, exam_number: int = None) -> InlineKeyboardMarkup:
     """Клавиатура действий после ответа (ОСНОВНАЯ ВЕРСИЯ)."""
     keyboard = []
     
@@ -167,7 +212,11 @@ def get_next_action_keyboard(last_mode: str, has_explanation: bool = False) -> I
     if last_mode == "topic":
         next_text = "➡️ Следующий вопрос по теме"
     elif last_mode == "exam_num":
-        next_text = "➡️ Следующий вопрос №"
+        # ИСПРАВЛЕНИЕ: Добавляем номер задания если он передан
+        if exam_number:
+            next_text = f"➡️ Следующий вопрос №{exam_number}"
+        else:
+            next_text = "➡️ Следующий вопрос"
     elif last_mode == "block":
         next_text = "➡️ Следующий из блока"
     elif last_mode == "mistakes":
@@ -175,7 +224,11 @@ def get_next_action_keyboard(last_mode: str, has_explanation: bool = False) -> I
     else:  # random_all
         next_text = "➡️ Следующий случайный"
     
-    first_row.append(InlineKeyboardButton(next_text, callback_data="next:continue"))
+    first_row.append(
+        InlineKeyboardButton(
+            next_text, callback_data=CallbackData.TEST_NEXT_CONTINUE
+        )
+    )
     
     # Добавляем кнопку пояснения если есть (во второй ряд для лучшего размещения)
     keyboard.append(first_row)
@@ -183,22 +236,35 @@ def get_next_action_keyboard(last_mode: str, has_explanation: bool = False) -> I
     # Второй ряд - пояснение (если есть)
     if has_explanation:
         keyboard.append([
-            InlineKeyboardButton("💡 Показать пояснение", callback_data="next:show_explanation")
+            InlineKeyboardButton(
+                "💡 Показать пояснение",
+                callback_data=CallbackData.TEST_NEXT_SHOW_EXPLANATION,
+            )
         ])
     
     # Третий ряд - навигация
     nav_row = []
     
     if last_mode in ["topic", "exam_num", "block"]:
-        nav_row.append(InlineKeyboardButton("🔄 Сменить тему", callback_data="next:change_topic"))
+        nav_row.append(
+            InlineKeyboardButton(
+                "🔄 Сменить тему", 
+                callback_data=CallbackData.TEST_NEXT_CHANGE_TOPIC
+            )
+        )
     else:
-        nav_row.append(InlineKeyboardButton("🔄 Сменить режим", callback_data="next:change_topic"))
+        nav_row.append(
+            InlineKeyboardButton(
+                "🔄 Сменить режим", 
+                callback_data=CallbackData.TEST_NEXT_CHANGE_TOPIC
+            )
+        )
     
     keyboard.append(nav_row)
     
     # Четвертый ряд - главное меню
     keyboard.append([
-        InlineKeyboardButton("🏠 Главное меню", callback_data="next:change_block")
+        InlineKeyboardButton("🏠 Главное меню", callback_data="to_main_menu")
     ])
     
     return InlineKeyboardMarkup(keyboard)
@@ -218,22 +284,61 @@ def get_error_keyboard() -> InlineKeyboardMarkup:
     ])
 
 def get_stats_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура для команды статистики."""
+    """Клавиатура для команды статистики с универсальными компонентами."""
+    return AdaptiveKeyboards.create_progress_keyboard(
+        has_detailed_stats=True,
+        can_export=True,
+        module_code="test"
+    )
+
+def get_progress_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура для экрана прогресса."""
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📊 Детальный отчет", callback_data="detailed_report"),
-            InlineKeyboardButton("📤 Экспорт CSV", callback_data="export_csv")
+            InlineKeyboardButton("📊 Подробнее", callback_data="test_detailed_analysis"),
+            InlineKeyboardButton("📥 Экспорт", callback_data="test_export_csv")
         ],
-        [InlineKeyboardButton("🔧 Работать над ошибками", callback_data="work_mistakes")],
-        [InlineKeyboardButton("🏠 Главное меню", callback_data="to_main_menu")]
+        [InlineKeyboardButton("🔧 Работа над ошибками", callback_data="test_work_mistakes")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="to_test_part_menu")]
     ])
 
-# Заменить функцию get_mistakes_nav_keyboard:
-def get_mistakes_nav_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура навигации по ошибкам."""
+def get_mistakes_finish_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура завершения работы над ошибками."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➡️ Следующая ошибка", callback_data="next:continue")],
-        [InlineKeyboardButton("⏩ Пропустить", callback_data="mistake_nav:skip")],
-        [InlineKeyboardButton("🚪 Закончить разбор", callback_data="mistake_nav:finish")],
-        [InlineKeyboardButton("🏠 Главное меню", callback_data="next:change_block")],
+        [InlineKeyboardButton("📊 Статистика", callback_data="test_part_progress")],
+        [InlineKeyboardButton("🎲 Случайные вопросы", callback_data="initial:select_random_all")],
+        [InlineKeyboardButton("🔙 К выбору режима", callback_data="to_test_part_menu")]
     ])
+
+def get_adaptive_result_keyboard(is_correct: bool, has_explanation: bool = False) -> InlineKeyboardMarkup:
+    """Адаптивная клавиатура после ответа с использованием универсальных компонентов."""
+    # Базовая адаптивная клавиатура
+    kb = AdaptiveKeyboards.create_result_keyboard(
+        score=1 if is_correct else 0,
+        max_score=1,
+        module_code="test"
+    )
+    
+    # Адаптируем callback_data под test_part
+    kb_list = list(kb.inline_keyboard)
+    
+    for row in kb_list:
+        for button in row:
+            # Маппинг универсальных callback на специфичные
+            if "новое задание" in button.text.lower():
+                button.callback_data = CallbackData.TEST_NEXT_CONTINUE
+            elif "попробовать снова" in button.text.lower():
+                button.callback_data = "test_retry"
+            elif "мой прогресс" in button.text.lower():
+                button.callback_data = "test_progress"
+            elif "в меню" in button.text.lower() and button.callback_data != "to_main_menu":
+                button.callback_data = "to_test_part_menu"
+    
+    # Добавляем кнопку пояснения если нужно
+    if has_explanation:
+        kb_list.insert(1, [InlineKeyboardButton(
+            "💡 Показать пояснение",
+            callback_data=CallbackData.TEST_NEXT_SHOW_EXPLANATION
+        )])
+    
+    return InlineKeyboardMarkup(kb_list)

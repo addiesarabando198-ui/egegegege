@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+
+{% block title %}Главная{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col">
+        <h1><i class="bi bi-speedometer2"></i> Панель управления</h1>
+        <p class="text-muted">Система составления расписания для ГБОУ "Школа Покровский квартал"</p>
+    </div>
+</div>
+
+<!-- Статистика -->
+<div class="row g-4 mb-4">
+    <div class="col-md-4 col-lg-2">
+        <div class="card text-center h-100 border-primary">
+            <div class="card-body">
+                <i class="bi bi-people fs-1 text-primary"></i>
+                <h2 class="mt-2">{{ stats.teachers }}</h2>
+                <p class="text-muted mb-0">Учителей</p>
+            </div>
+            <div class="card-footer bg-transparent">
+                <a href="{{ url_for('teachers_list') }}" class="btn btn-sm btn-outline-primary">
+                    Управление
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4 col-lg-2">
+        <div class="card text-center h-100 border-success">
+            <div class="card-body">
+                <i class="bi bi-door-open fs-1 text-success"></i>
+                <h2 class="mt-2">{{ stats.classrooms }}</h2>
+                <p class="text-muted mb-0">Кабинетов</p>
+            </div>
+            <div class="card-footer bg-transparent">
+                <a href="{{ url_for('classrooms_list') }}" class="btn btn-sm btn-outline-success">
+                    Управление
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4 col-lg-2">
+        <div class="card text-center h-100 border-info">
+            <div class="card-body">
+                <i class="bi bi-mortarboard fs-1 text-info"></i>
+                <h2 class="mt-2">{{ stats.classes }}</h2>
+                <p class="text-muted mb-0">Классов</p>
+            </div>
+            <div class="card-footer bg-transparent">
+                <a href="{{ url_for('classes_list') }}" class="btn btn-sm btn-outline-info">
+                    Управление
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4 col-lg-2">
+        <div class="card text-center h-100 border-warning">
+            <div class="card-body">
+                <i class="bi bi-book fs-1 text-warning"></i>
+                <h2 class="mt-2">{{ stats.subjects }}</h2>
+                <p class="text-muted mb-0">Предметов</p>
+            </div>
+            <div class="card-footer bg-transparent">
+                <a href="{{ url_for('subjects_list') }}" class="btn btn-sm btn-outline-warning">
+                    Управление
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4 col-lg-2">
+        <div class="card text-center h-100 border-danger">
+            <div class="card-body">
+                <i class="bi bi-list-check fs-1 text-danger"></i>
+                <h2 class="mt-2">{{ stats.workloads }}</h2>
+                <p class="text-muted mb-0">Нагрузок</p>
+            </div>
+            <div class="card-footer bg-transparent">
+                <a href="{{ url_for('workload_list') }}" class="btn btn-sm btn-outline-danger">
+                    Управление
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4 col-lg-2">
+        <div class="card text-center h-100 border-secondary">
+            <div class="card-body">
+                <i class="bi bi-calendar3 fs-1 text-secondary"></i>
+                <h2 class="mt-2">{{ stats.schedules }}</h2>
+                <p class="text-muted mb-0">Расписаний</p>
+            </div>
+            <div class="card-footer bg-transparent">
+                <a href="{{ url_for('schedule_view') }}" class="btn btn-sm btn-outline-secondary">
+                    Просмотр
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Активное расписание -->
+<div class="row mb-4">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-table"></i> Текущее расписание</h5>
+                <a href="{{ url_for('schedule_view') }}" class="btn btn-sm btn-primary">
+                    Открыть
+                </a>
+            </div>
+            <div class="card-body">
+                {% if active_schedule %}
+                    <div class="d-flex align-items-center">
+                        <span class="badge bg-success me-2">Активно</span>
+                        <h6 class="mb-0">{{ active_schedule.name }}</h6>
+                    </div>
+                    <p class="text-muted mt-2 mb-0">
+                        {{ active_schedule.description or 'Без описания' }}
+                    </p>
+                    <small class="text-muted">
+                        Уроков: {{ active_schedule.lessons.count() }} |
+                        Обновлено: {{ active_schedule.updated_at.strftime('%d.%m.%Y %H:%M') }}
+                    </small>
+                {% else %}
+                    <div class="text-center py-4">
+                        <i class="bi bi-calendar-x fs-1 text-muted"></i>
+                        <p class="text-muted mt-2">Нет активного расписания</p>
+                        <a href="{{ url_for('generate_page') }}" class="btn btn-primary">
+                            <i class="bi bi-magic"></i> Сгенерировать
+                        </a>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-lightning"></i> Быстрые действия</h5>
+            </div>
+            <div class="card-body">
+                <div class="d-grid gap-2">
+                    <a href="{{ url_for('generate_page') }}" class="btn btn-success">
+                        <i class="bi bi-magic"></i> Сгенерировать расписание
+                    </a>
+                    <a href="{{ url_for('import_page') }}" class="btn btn-outline-primary">
+                        <i class="bi bi-upload"></i> Импорт из Excel
+                    </a>
+                    <a href="{{ url_for('teachers_list') }}" class="btn btn-outline-secondary">
+                        <i class="bi bi-person-plus"></i> Добавить учителя
+                    </a>
+                    <a href="{{ url_for('classes_list') }}" class="btn btn-outline-secondary">
+                        <i class="bi bi-plus-circle"></i> Добавить класс
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Инструкция -->
+<div class="row">
+    <div class="col">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-info-circle"></i> Как пользоваться</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3 text-center mb-3">
+                        <div class="rounded-circle bg-primary text-white d-inline-flex align-items-center justify-content-center" style="width: 50px; height: 50px;">
+                            <span class="fs-5">1</span>
+                        </div>
+                        <h6 class="mt-2">Добавьте данные</h6>
+                        <small class="text-muted">Учителя, кабинеты, классы, предметы</small>
+                    </div>
+                    <div class="col-md-3 text-center mb-3">
+                        <div class="rounded-circle bg-primary text-white d-inline-flex align-items-center justify-content-center" style="width: 50px; height: 50px;">
+                            <span class="fs-5">2</span>
+                        </div>
+                        <h6 class="mt-2">Настройте нагрузку</h6>
+                        <small class="text-muted">Кто, что и сколько часов ведёт</small>
+                    </div>
+                    <div class="col-md-3 text-center mb-3">
+                        <div class="rounded-circle bg-primary text-white d-inline-flex align-items-center justify-content-center" style="width: 50px; height: 50px;">
+                            <span class="fs-5">3</span>
+                        </div>
+                        <h6 class="mt-2">Сгенерируйте</h6>
+                        <small class="text-muted">Автоматическое создание расписания</small>
+                    </div>
+                    <div class="col-md-3 text-center mb-3">
+                        <div class="rounded-circle bg-primary text-white d-inline-flex align-items-center justify-content-center" style="width: 50px; height: 50px;">
+                            <span class="fs-5">4</span>
+                        </div>
+                        <h6 class="mt-2">Корректируйте</h6>
+                        <small class="text-muted">Перетаскивайте уроки мышкой</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

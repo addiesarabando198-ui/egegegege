@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+
+{% block title %}Предметы{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1><i class="bi bi-book"></i> Предметы</h1>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#subjectModal" onclick="openSubjectModal()">
+        <i class="bi bi-plus-lg"></i> Добавить предмет
+    </button>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>Цвет</th>
+                        <th>Название</th>
+                        <th>Сокращение</th>
+                        <th>ЕГЭ</th>
+                        <th>Часов практикума</th>
+                        <th width="120">Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for subject in subjects %}
+                    <tr>
+                        <td>
+                            <span class="badge" style="background-color: {{ subject.color or '#6c757d' }}; width: 30px;">&nbsp;</span>
+                        </td>
+                        <td><strong>{{ subject.name }}</strong></td>
+                        <td>{{ subject.short_name or '—' }}</td>
+                        <td>
+                            {% if subject.is_ege %}
+                            <span class="badge bg-success">Да</span>
+                            {% else %}
+                            <span class="badge bg-secondary">Нет</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ subject.ege_hours if subject.is_ege else '—' }}</td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary" onclick="editSubject({{ subject.id }})">
+                                <i class="bi bi-pencil"></i>
+                            </button>
+                            <button class="btn btn-sm btn-outline-danger" onclick="deleteSubject({{ subject.id }}, '{{ subject.name }}')">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="text-center text-muted py-4">
+                            <i class="bi bi-inbox fs-1"></i>
+                            <p>Нет предметов</p>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Модальное окно -->
+<div class="modal fade" id="subjectModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="subjectModalTitle">Добавить предмет</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="subjectForm">
+                <div class="modal-body">
+                    <input type="hidden" id="subjectId">
+
+                    <div class="row">
+                        <div class="col-md-8 mb-3">
+                            <label class="form-label">Название <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="subjectName" required placeholder="Математика">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Сокращение</label>
+                            <input type="text" class="form-control" id="subjectShortName" placeholder="Мат" maxlength="20">
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Цвет</label>
+                            <input type="color" class="form-control form-control-color w-100" id="subjectColor" value="#3498db">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <div class="form-check mt-4">
+                                <input class="form-check-input" type="checkbox" id="subjectIsEge" onchange="toggleEgeHours()">
+                                <label class="form-check-label" for="subjectIsEge">
+                                    Есть практикум ЕГЭ
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3" id="egeHoursBlock" style="display: none;">
+                        <label class="form-label">Часов практикума в неделю</label>
+                        <input type="number" class="form-control" id="subjectEgeHours" value="3" min="0">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Сохранить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const subjectModal = new bootstrap.Modal(document.getElementById('subjectModal'));
+
+function toggleEgeHours() {
+    const isEge = document.getElementById('subjectIsEge').checked;
+    document.getElementById('egeHoursBlock').style.display = isEge ? 'block' : 'none';
+}
+
+function openSubjectModal() {
+    document.getElementById('subjectForm').reset();
+    document.getElementById('subjectId').value = '';
+    document.getElementById('subjectModalTitle').textContent = 'Добавить предмет';
+    document.getElementById('subjectColor').value = '#3498db';
+    document.getElementById('egeHoursBlock').style.display = 'none';
+}
+
+function editSubject(id) {
+    fetch(`/api/subjects/${id}`)
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('subjectId').value = data.id;
+            document.getElementById('subjectName').value = data.name;
+            document.getElementById('subjectShortName').value = data.short_name || '';
+            document.getElementById('subjectColor').value = data.color || '#3498db';
+            document.getElementById('subjectIsEge').checked = data.is_ege;
+            document.getElementById('subjectEgeHours').value = data.ege_hours || 3;
+            document.getElementById('egeHoursBlock').style.display = data.is_ege ? 'block' : 'none';
+            document.getElementById('subjectModalTitle').textContent = 'Редактировать предмет';
+            subjectModal.show();
+        });
+}
+
+function deleteSubject(id, name) {
+    if (confirm(`Удалить предмет "${name}"?`)) {
+        fetch(`/api/subjects/${id}`, { method: 'DELETE' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) location.reload();
+                else alert(data.error);
+            });
+    }
+}
+
+document.getElementById('subjectForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const id = document.getElementById('subjectId').value;
+    const method = id ? 'PUT' : 'POST';
+    const url = id ? `/api/subjects/${id}` : '/api/subjects';
+    const isEge = document.getElementById('subjectIsEge').checked;
+
+    fetch(url, {
+        method: method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            name: document.getElementById('subjectName').value,
+            short_name: document.getElementById('subjectShortName').value || null,
+            color: document.getElementById('subjectColor').value,
+            is_ege: isEge,
+            ege_hours: isEge ? parseInt(document.getElementById('subjectEgeHours').value) : 0
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.id) location.reload();
+        else alert(data.error);
+    });
+});
+</script>
+{% endblock %}

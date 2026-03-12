@@ -1,32 +1,45 @@
 """Обработчики для задания 19."""
 
+from __future__ import annotations  # Python 3.8 compatibility
+
+import asyncio
 import logging
 import os
 import json
 import random
-from typing import Optional, Dict, List
+import html
+from typing import Optional, Dict, List, Any
 from core.document_processor import DocumentHandlerMixin
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from core.vision_service import process_photo_message
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.constants import ParseMode
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes, ConversationHandler
+from telegram.error import BadRequest
 from core.admin_tools import admin_manager
-from core import states
-from core.ai_evaluator import Task19Evaluator, EvaluationResult
-from datetime import datetime
+from core import states, db
+from core.states import TASK19_WAITING
+from core.ai_evaluator import EvaluationResult
+from datetime import datetime, date
 import io
-from .evaluator import StrictnessLevel, Task19AIEvaluator
+from core.vision_service import get_vision_service
+from core.freemium_manager import get_freemium_manager
+from .evaluator import Task19AIEvaluator, AI_EVALUATOR_AVAILABLE
 from core.universal_ui import UniversalUIComponents, AdaptiveKeyboards, MessageFormatter
 from core.ui_helpers import (
     show_thinking_animation,
+    show_extended_thinking_animation,
     show_streak_notification,
+    show_ai_evaluation_animation,
     get_personalized_greeting,
     get_motivational_message,
     create_visual_progress,
+    get_achievement_emoji,
 )
+from core.migration import ensure_module_migration
+from core.error_handler import safe_handler
+from core.state_validator import validate_state_transition, state_validator
 
-TASK19_STRICTNESS = os.getenv('TASK19_STRICTNESS', 'STRICT').upper()
-
-# Глобальный evaluator с настройками
+# Глобальный evaluator
 evaluator = None
 
 logger = logging.getLogger(__name__)
@@ -34,104 +47,42 @@ logger = logging.getLogger(__name__)
 # Глобальное хранилище для данных задания 19
 task19_data = {}
 
-# Инициализируем evaluator если еще не создан
+# Инициализируем evaluator
 if not evaluator:
     try:
-        strictness_level = StrictnessLevel[os.getenv('TASK19_STRICTNESS', 'STRICT').upper()]
-    except KeyError:
-        strictness_level = StrictnessLevel.STRICT
-    
-    try:
-        evaluator = Task19AIEvaluator(strictness=strictness_level)
-        logger.info(f"Task19 AI evaluator initialized with {strictness_level.value} strictness")
+        evaluator = Task19AIEvaluator()
+        logger.info("Task19 AI evaluator initialized")
     except Exception as e:
         logger.warning(f"Failed to initialize AI evaluator: {e}")
         evaluator = None
 
-
-# Добавить команду для изменения уровня строгости (опционально)
-async def set_strictness(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Установка уровня строгости проверки (только для админов)."""
-    query = update.callback_query
-    await query.answer()
-    
-    # Проверка прав (добавьте свою логику проверки админов)
-    if not admin_manager.is_admin(user_id):
-        await query.answer("⛔ Только для администраторов", show_alert=True)
-        return
-    
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🟢 Мягкий", callback_data="t19_strict:lenient")],
-        [InlineKeyboardButton("🟡 Стандартный", callback_data="t19_strict:standard")],
-        [InlineKeyboardButton("🔴 Строгий (ФИПИ)", callback_data="t19_strict:strict")],
-        [InlineKeyboardButton("⬅️ Назад", callback_data="t19_menu")]
-    ])
-    
-    current = evaluator.strictness.value if evaluator else "не установлен"
-    
-    await query.edit_message_text(
-        f"⚙️ <b>Настройка строгости проверки</b>\n\n"
-        f"Текущий уровень: <b>{current}</b>\n\n"
-        "🟢 <b>Мягкий</b> - для начальной тренировки\n"
-        "🟡 <b>Стандартный</b> - баланс строгости\n"
-        "🔴 <b>Строгий</b> - полное соответствие ФИПИ\n\n"
-        "Выберите уровень:",
-        reply_markup=kb,
-        parse_mode=ParseMode.HTML
-    )
-
-
-async def apply_strictness(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Применение выбранного уровня строгости."""
-    global evaluator
-    
-    query = update.callback_query
-    await query.answer()
-    
-    level_str = query.data.split(":")[1].upper()
-    
-    try:
-        new_level = StrictnessLevel[level_str]
-        evaluator = Task19AIEvaluator(strictness=new_level)
-        
-        await query.answer(f"✅ Установлен уровень: {new_level.value}", show_alert=True)
-        
-        # Возвращаемся в меню
-        return await return_to_menu(update, context)
-        
-    except Exception as e:
-        logger.error(f"Error setting strictness: {e}")
-        await query.answer("❌ Ошибка изменения настроек", show_alert=True)
+def set_active_module(context: ContextTypes.DEFAULT_TYPE):
+    """Устанавливает task19 как активный модуль."""
+    context.user_data['active_module'] = 'task19'
+    context.user_data['current_module'] = 'task19'
 
 async def delete_previous_messages(context: ContextTypes.DEFAULT_TYPE, chat_id: int, keep_message_id: Optional[int] = None):
-    """Удаляет предыдущие сообщения диалога (включая сообщения пользователя)."""
+    """Удаляет предыдущие сообщения диалога task19."""
     if not hasattr(context, 'bot') or not context.bot:
         logger.warning("Bot instance not available for message deletion")
         return
-    
+
     # Список ключей с ID сообщений для удаления
     message_keys = [
-        'task19_question_msg_id',   # Сообщение с заданием
-        'task19_answer_msg_id',     # Сообщение пользователя с ответом
+        'task19_question_msg_id',   # Сообщение с вопросом
+        'task19_answer_msg_id',     # Сообщение с ответом пользователя
         'task19_result_msg_id',     # Сообщение с результатом проверки
         'task19_thinking_msg_id'    # Сообщение "Анализирую..."
     ]
-    
+
     messages_to_delete = []
     deleted_count = 0
-    
-    # Собираем ID сообщений для удаления
+
     for key in message_keys:
         msg_id = context.user_data.get(key)
         if msg_id and msg_id != keep_message_id:
             messages_to_delete.append((key, msg_id))
-    
-    # Добавляем дополнительные сообщения (если есть)
-    extra_messages = context.user_data.get('task19_extra_messages', [])
-    for msg_id in extra_messages:
-        if msg_id and msg_id != keep_message_id:
-            messages_to_delete.append(('extra', msg_id))
-    
+
     # Удаляем сообщения
     for key, msg_id in messages_to_delete:
         try:
@@ -140,27 +91,36 @@ async def delete_previous_messages(context: ContextTypes.DEFAULT_TYPE, chat_id: 
             logger.debug(f"Deleted {key}: {msg_id}")
         except Exception as e:
             logger.debug(f"Failed to delete {key} {msg_id}: {e}")
-    
-    # Очищаем контекст (кроме keep_message_id если оно есть в контексте)
+
+    # Очищаем контекст
     for key in message_keys:
-        if context.user_data.get(key) != keep_message_id:
-            context.user_data.pop(key, None)
-    
-    # Очищаем список дополнительных сообщений
-    context.user_data['task19_extra_messages'] = []
-    
+        context.user_data.pop(key, None)
+
     logger.info(f"Task19: Deleted {deleted_count}/{len(messages_to_delete)} messages")
 
+# Оптимизированная загрузка данных с кэшированием
+_topics_cache = None
+_topics_cache_time = None
+
 async def init_task19_data():
-    """Инициализация данных для задания 19."""
-    global task19_data
-
+    """Инициализация данных для задания 19 с кэшированием."""
+    global task19_data, _topics_cache, _topics_cache_time
+    
+    # Проверяем кэш (обновляем раз в час)
+    if _topics_cache and _topics_cache_time:
+        if (datetime.now() - _topics_cache_time).seconds < 3600:
+            # ИСПРАВЛЕНИЕ: Используем обработанные данные из кэша
+            task19_data = _topics_cache
+            logger.info(f"Loaded task19 data from cache: {len(task19_data.get('topics', []))} topics")
+            return
+    
     data_file = os.path.join(os.path.dirname(__file__), "task19_topics.json")
-
+    
     try:
         with open(data_file, "r", encoding="utf-8") as f:
             raw = json.load(f)
 
+        # Поддержка двух форматов данных: список тем или словарь блоков
         if isinstance(raw, list):
             topics_list = raw
         else:
@@ -171,147 +131,157 @@ async def init_task19_data():
                     topics_list.append(topic)
 
         all_topics = []
-        topic_by_id: Dict[int, Dict] = {}
-        blocks = {}
+        topic_by_id = {}
+        topics_by_block = {}
+
         for topic in topics_list:
-            block = topic.get("block", "Без категории")
+            block_name = topic.get("block", "Без категории")
             all_topics.append(topic)
             topic_by_id[topic["id"]] = topic
-            blocks.setdefault(block, {"topics": []})["topics"].append(topic)
+            topics_by_block.setdefault(block_name, []).append(topic)
 
         task19_data = {
             "topics": all_topics,
             "topic_by_id": topic_by_id,
-            "blocks": blocks,
+            "topics_by_block": topics_by_block,
+            "blocks": {b: {"topics": t} for b, t in topics_by_block.items()},
         }
+
+        # ИСПРАВЛЕНИЕ: Кэшируем обработанные данные, а не сырые
+        _topics_cache = task19_data
+        _topics_cache_time = datetime.now()
+        
         logger.info(f"Loaded {len(all_topics)} topics for task19")
+    except FileNotFoundError:
+        logger.error(f"File not found: {data_file}")
+        task19_data = {"topics": [], "blocks": {}, "topics_by_block": {}, "topic_by_id": {}}
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error in {data_file}: {e}")
+        task19_data = {"topics": [], "blocks": {}, "topics_by_block": {}, "topic_by_id": {}}
     except Exception as e:
         logger.error(f"Failed to load task19 data: {e}")
-        task19_data = {"topics": [], "blocks": {}}
+        task19_data = {"topics": [], "blocks": {}, "topics_by_block": {}, "topic_by_id": {}}
 
 
+@safe_handler()
+@validate_state_transition({ConversationHandler.END, None})
 async def entry_from_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Вход в задание 19 из главного меню."""
     query = update.callback_query
+    
+    # Устанавливаем активный модуль
+    set_active_module(context)
+    
+    # Отвечаем на callback, чтобы убрать "часики"
     await query.answer()
     
+    # Получаем статистику пользователя
     results = context.user_data.get('task19_results', [])
     user_stats = {
         'total_attempts': len(results),
         'average_score': sum(r['score'] for r in results) / len(results) if results else 0,
         'streak': context.user_data.get('correct_streak', 0),
         'weak_topics_count': 0,
-        'progress_percent': int(len(set(r['topic'] for r in results)) / 50 * 100) if results else 0,
-    }
-
-    greeting = get_personalized_greeting(user_stats)
-    text = greeting + MessageFormatter.format_welcome_message(
-        "задание 19",
-        is_new_user=user_stats['total_attempts'] == 0
-    )
-    
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("💪 Практика", callback_data="t19_practice")],
-        [InlineKeyboardButton("📚 Теория и советы", callback_data="t19_theory")],
-        [InlineKeyboardButton("🏦 Банк примеров", callback_data="t19_examples")],
-        [InlineKeyboardButton("📊 Мой прогресс", callback_data="t19_progress")],
-        [InlineKeyboardButton("⚙️ Настройки", callback_data="t19_settings")],
-        [InlineKeyboardButton("🏠 Главное меню", callback_data="to_main_menu")]
-    ])
-    
-    await query.edit_message_text(
-        text,
-        reply_markup=kb,
-        parse_mode=ParseMode.HTML
-    )
-
-    return states.CHOOSING_MODE
-
-
-def _build_topic_message(topic: Dict) -> str:
-    """Формирует текст сообщения с заданием по теме."""
-    return (
-        "📝 <b>Задание 19</b>\n\n"
-        f"<b>Тема:</b> {topic['title']}\n\n"
-        f"<b>Задание:</b> {topic['task_text']}\n\n"
-        "<b>Требования:</b>\n"
-        "• Приведите три примера\n"
-        "• Каждый пример должен быть конкретным\n"
-        "• Избегайте абстрактных формулировок\n"
-        "• Указывайте детали (имена, даты, места)\n\n"
-        "💡 <i>Отправьте ваш ответ одним сообщением</i>"
-    )
-
-
-async def cmd_task19(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /task19."""
-    results = context.user_data.get('task19_results', [])
-    user_stats = {
-        'total_attempts': len(results),
-        'average_score': sum(r['score'] for r in results) / len(results) if results else 0,
-        'streak': 0,
-        'weak_topics_count': 0,
         'progress_percent': int(len(set(r['topic'] for r in results)) / 50 * 100) if results else 0
     }
     
+    # Формируем приветствие
     greeting = get_personalized_greeting(user_stats)
     text = greeting + MessageFormatter.format_welcome_message(
         "задание 19",
         is_new_user=user_stats['total_attempts'] == 0
     )
     
+    # Создаем адаптивную клавиатуру
     kb = AdaptiveKeyboards.create_menu_keyboard(user_stats, module_code="t19")
     
-    await update.message.reply_text(
+    # Показываем меню
+    try:
+        await query.edit_message_text(
+            text,
+            reply_markup=kb,
+            parse_mode=ParseMode.HTML
+        )
+    except BadRequest as e:
+        # Если не удалось отредактировать (старое сообщение, удалено и т.д.) — отправляем новое
+        logger.debug(f"edit_message_text failed in entry_from_menu: {e}, sending new message")
+        await query.message.chat.send_message(
+            text,
+            reply_markup=kb,
+            parse_mode=ParseMode.HTML
+        )
+
+    # Возвращаем состояние CHOOSING_MODE для работы с меню
+    return states.CHOOSING_MODE
+
+@safe_handler()
+@validate_state_transition({states.CHOOSING_MODE})
+async def practice_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню выбора типа практики."""
+    query = update.callback_query
+    
+    # Проверка загрузки данных
+    if not task19_data or not task19_data.get('topics'):
+        logger.error("Task19 data not loaded when entering practice mode")
+        await query.answer("❌ Данные заданий не загружены", show_alert=True)
+        
+        # Пытаемся загрузить данные еще раз
+        await init_task19_data()
+        
+        # Если после повторной загрузки данных все еще нет
+        if not task19_data or not task19_data.get('topics'):
+            text = """❌ <b>Данные заданий не загружены</b>
+            
+К сожалению, не удалось загрузить базу заданий.
+Пожалуйста, обратитесь к администратору."""
+            
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Попробовать снова", callback_data="t19_practice")],
+                [InlineKeyboardButton("⬅️ В меню", callback_data="t19_menu")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="to_main_menu")]
+            ])
+            
+            await query.edit_message_text(
+                text,
+                reply_markup=kb,
+                parse_mode=ParseMode.HTML
+            )
+            return states.CHOOSING_MODE
+    
+    # Очищаем предыдущее состояние практики
+    context.user_data.pop('current_topic', None)
+    context.user_data.pop('practice_results', None)
+    
+    # Очищаем предыдущие ID сообщений
+    for key in ['task19_question_msg_id', 'task19_answer_msg_id', 
+                'task19_result_msg_id', 'task19_thinking_msg_id']:
+        context.user_data.pop(key, None)
+    
+    # Показываем меню выбора типа практики
+    text = "💪 <b>Режим практики</b>\n\nВыберите способ выбора темы:"
+    
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎲 Случайная тема", callback_data="t19_random_all")],
+        [InlineKeyboardButton("📚 По блокам", callback_data="t19_select_block")],
+        [InlineKeyboardButton("📋 Все темы", callback_data="t19_list_topics")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="t19_menu")]
+    ])
+    
+    # ВАЖНО: используем edit_message_text вместо reply_text
+    await query.edit_message_text(
         text,
         reply_markup=kb,
         parse_mode=ParseMode.HTML
     )
     
+    # Остаемся в состоянии CHOOSING_MODE для обработки выбора
     return states.CHOOSING_MODE
 
-async def practice_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Режим практики - выбор темы."""
-    query = update.callback_query
-    await query.answer()
-    
-    # Удаляем предыдущие сообщения диалога
-    await delete_previous_messages(context, query.message.chat_id)
-    
-    if not task19_data.get("topics"):
-        await query.edit_message_text(
-            "❌ Данные заданий не загружены. Попробуйте позже.",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("⬅️ Назад", callback_data="t19_menu")]]
-            ),
-        )
-        return states.CHOOSING_MODE
-
-    text = (
-        "🎯 <b>Режим практики</b>\n\n"
-        "Как вы хотите выбрать тему?"
-    )
-
-    kb_buttons = [
-        [InlineKeyboardButton("📚 По блокам", callback_data="t19_select_block")],
-        [InlineKeyboardButton("🗂️ Все темы списком", callback_data="t19_list_topics")],
-        [InlineKeyboardButton("🎲 Случайная тема", callback_data="t19_random_all")],
-        [InlineKeyboardButton("⬅️ Назад", callback_data="t19_menu")],
-    ]
-
-    await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(kb_buttons),
-        parse_mode=ParseMode.HTML,
-    )
-
-    return states.CHOOSING_MODE
-
-
+@safe_handler()
+@validate_state_transition({states.CHOOSING_BLOCK})
 async def select_block(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Выбор блока тем."""
     query = update.callback_query
-    await query.answer()
 
     blocks = task19_data.get("blocks", {})
     if not blocks:
@@ -332,10 +302,10 @@ async def select_block(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return states.CHOOSING_BLOCK
 
 
+@safe_handler()
 async def block_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Меню внутри выбранного блока."""
     query = update.callback_query
-    await query.answer()
 
     block_name = query.data.split(":", 1)[1]
     context.user_data["selected_block"] = block_name
@@ -355,14 +325,16 @@ async def block_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return states.CHOOSING_BLOCK
 
 
+@safe_handler()
 async def random_topic_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Случайная тема из всех блоков."""
     query = update.callback_query
-    await query.answer()
+
+    # Удаляем предыдущие сообщения перед показом нового вопроса
+    await delete_previous_messages(context, query.message.chat_id)
 
     topics: List[Dict] = task19_data.get("topics", [])
     if not topics:
-        await query.answer("Темы не найдены", show_alert=True)
         return states.CHOOSING_MODE
 
     topic = random.choice(topics)
@@ -374,22 +346,29 @@ async def random_topic_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["current_topic"] = topic
     await query.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
-    return states.ANSWERING
+    # Сохраняем ID сообщения с вопросом
+    context.user_data['task19_question_msg_id'] = query.message.message_id
+
+    # ВАЖНО: Устанавливаем состояние явно
+    state_validator.set_state(query.from_user.id, TASK19_WAITING)
+
+    return TASK19_WAITING
 
 
+@safe_handler()
 async def random_topic_block(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Случайная тема из выбранного блока."""
     query = update.callback_query
-    await query.answer()
+
+    # Удаляем предыдущие сообщения перед показом нового вопроса
+    await delete_previous_messages(context, query.message.chat_id)
 
     block_name = context.user_data.get("selected_block")
     if not block_name:
-        await query.answer("Блок не выбран", show_alert=True)
         return states.CHOOSING_MODE
 
     topics = [t for t in task19_data.get("topics", []) if t.get("block") == block_name]
     if not topics:
-        await query.answer("Темы в блоке не найдены", show_alert=True)
         return states.CHOOSING_BLOCK
 
     topic = random.choice(topics)
@@ -400,13 +379,18 @@ async def random_topic_block(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["current_topic"] = topic
     await query.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
-    return states.ANSWERING
+    # Сохраняем ID сообщения с вопросом
+    context.user_data['task19_question_msg_id'] = query.message.message_id
 
+    # ВАЖНО: Устанавливаем состояние явно
+    state_validator.set_state(query.from_user.id, TASK19_WAITING)
 
+    return TASK19_WAITING
+
+@safe_handler()
 async def list_topics(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает список тем (с пагинацией)."""
     query = update.callback_query
-    await query.answer()
 
     page = 0
     if query.data.startswith("t19_list_topics:page:"):
@@ -480,58 +464,56 @@ async def list_topics(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return states.CHOOSING_TOPIC
 
 
+@safe_handler()
 async def select_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Выбор конкретной темы."""
+    """Обработка выбора конкретной темы."""
     query = update.callback_query
-    await query.answer()
     
-    if query.data == "t19_random":
-        topic = random.choice(task19_data['topics'])
-    else:
-        topic_id = int(query.data.split(':')[1])
-        topic = next((t for t in task19_data['topics'] if t['id'] == topic_id), None)
+    # Устанавливаем активный модуль
+    set_active_module(context)
+    
+    # Извлекаем topic_id из callback_data
+    topic_id = int(query.data.split(':')[1])
+    topic = next((t for t in task19_data['topics'] if t['id'] == topic_id), None)
     
     if not topic:
         await query.edit_message_text("❌ Тема не найдена")
         return states.CHOOSING_MODE
     
+    # Удаляем предыдущие сообщения перед показом нового вопроса
+    await delete_previous_messages(context, query.message.chat_id)
+
     # Сохраняем текущую тему
     context.user_data['current_topic'] = topic
-    
-    text = f"""📝 <b>Задание 19</b>
-
-<b>Тема:</b> {topic['title']}
-
-<b>Задание:</b> {topic['task_text']}
-
-<b>Требования:</b>
-• Приведите три примера
-• Каждый пример должен быть конкретным
-• Избегайте абстрактных формулировок
-• Указывайте детали (имена, даты, места)
-
-💡 <i>Отправьте ваш ответ одним сообщением</i>"""
-    
+    text = _build_topic_message(topic)
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("⬅️ Выбрать другую тему", callback_data="t19_practice")
     ]])
-    
-    await query.edit_message_text(
+
+    edited_msg = await query.edit_message_text(
         text,
         reply_markup=kb,
         parse_mode=ParseMode.HTML
     )
-    
-    return states.ANSWERING
 
+    # Сохраняем ID сообщения с вопросом
+    context.user_data['task19_question_msg_id'] = query.message.message_id
+
+    # ВАЖНО: Устанавливаем состояние явно
+    state_validator.set_state(query.from_user.id, TASK19_WAITING)
+
+    return TASK19_WAITING
+
+@safe_handler()
 async def show_progress_enhanced(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показ прогресса с улучшенным UI."""
+    """Показ прогресса с изолированным хранилищем."""
     query = update.callback_query
-    await query.answer()
     
+    # ИЗМЕНЕНИЕ: Используем task19_practice_stats
     results = context.user_data.get('task19_results', [])
+    task19_stats = context.user_data.get('task19_practice_stats', {})
     
-    if not results:
+    if not results and not task19_stats:
         text = MessageFormatter.format_welcome_message(
             "задание 19", 
             is_new_user=True
@@ -541,251 +523,633 @@ async def show_progress_enhanced(update: Update, context: ContextTypes.DEFAULT_T
             InlineKeyboardButton("⬅️ Назад", callback_data="t19_menu")
         ]])
     else:
-        # Собираем статистику
-        total_attempts = len(results)
-        total_score = sum(r['score'] for r in results)
-        max_possible = sum(r['max_score'] for r in results)
-        avg_score = total_score / total_attempts
+        total_attempts = 0
+        total_score = 0
+        max_possible = 0
+        topic_stats_combined = {}
         
-        # Анализ по темам
-        topic_stats = {}
-        for result in results:
-            topic = result['topic']
-            if topic not in topic_stats:
-                topic_stats[topic] = []
-            topic_stats[topic].append(result['score'])
+        if results:
+            for result in results:
+                topic_id = str(result.get('topic_id', 0))
+                topic_title = result.get('topic_title', result.get('topic', 'Неизвестная тема'))
+                
+                if topic_id not in topic_stats_combined:
+                    topic_stats_combined[topic_id] = {
+                        'title': topic_title,
+                        'scores': [],
+                        'attempts': 0
+                    }
+                
+                topic_stats_combined[topic_id]['scores'].append(result['score'])
+                topic_stats_combined[topic_id]['attempts'] += 1
+                total_attempts += 1
+                total_score += result['score']
+                max_possible += result.get('max_score', 3)
         
-        # Топ темы
-        top_results = []
-        for topic, scores in topic_stats.items():
-            avg = sum(scores) / len(scores)
-            top_results.append({
-                'topic': topic,
-                'score': avg,
-                'max_score': 3
-            })
-        top_results.sort(key=lambda x: x['score'], reverse=True)
+        # Дополняем из task19_practice_stats
+        for topic_id_str, topic_data in task19_stats.items():
+            if topic_data.get('attempts', 0) > 0:
+                if topic_id_str not in topic_stats_combined:
+                    topic_stats_combined[topic_id_str] = {
+                        'title': topic_data.get('topic_title', f'Тема {topic_id_str}'),
+                        'scores': topic_data.get('scores', []),
+                        'attempts': topic_data.get('attempts', 0)
+                    }
+                    total_attempts += topic_data['attempts']
+                    total_score += sum(topic_data.get('scores', []))
+                    max_possible += topic_data['attempts'] * 3
         
-        # Форматируем сообщение
-        text = MessageFormatter.format_progress_message({
-            'total_attempts': total_attempts,
-            'average_score': avg_score,
-            'completed': len(topic_stats),
-            'total': 50,  # Предполагаем 50 тем
-            'total_time': 0,  # Добавить подсчет времени
-            'top_results': top_results[:3]
-        }, "заданию 19")
+        avg_score = total_score / total_attempts if total_attempts > 0 else 0
         
-        # Клавиатура прогресса
-        kb = AdaptiveKeyboards.create_progress_keyboard(
-            has_detailed_stats=True,
-            can_export=True,
-            module_code="t19"
-        )
+        text = f"""📊 <b>Ваш прогресс в Задании 19</b>
+
+📝 <b>Всего попыток:</b> {total_attempts}
+⭐ <b>Средний балл:</b> {avg_score:.1f}/3
+📚 <b>Изучено тем:</b> {len(topic_stats_combined)}
+"""
+        
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📥 Экспорт результатов", callback_data="t19_export")],
+            [InlineKeyboardButton("🏅 Достижения", callback_data="t19_achievements")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="t19_menu")]
+        ])
     
-    await query.edit_message_text(
-        text,
-        reply_markup=kb,
-        parse_mode=ParseMode.HTML
-    )
+    await query.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     return states.CHOOSING_MODE
 
-async def choose_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора темы."""
-    query = update.callback_query
-    await query.answer()
-    
-    # Удаляем все предыдущие сообщения перед показом нового задания
-    await delete_previous_messages(context, query.message.chat_id)
-    
-    if query.data == "t19_random":
-        topic = random.choice(task19_data['topics'])
-    else:
-        topic_id = int(query.data.split(':')[1])
-        topic = next((t for t in task19_data['topics'] if t['id'] == topic_id), None)
-    
-    if not topic:
-        await query.message.chat.send_message(
-            "❌ Тема не найдена",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("⬅️ Назад", callback_data="t19_practice")
-            ]])
-        )
-        return states.CHOOSING_MODE
-    
-    # Сохраняем текущую тему
-    context.user_data['current_topic'] = topic
-    
-    text = f"""📝 <b>Задание 19</b>
 
-<b>Тема:</b> {topic['title']}
-
-<b>Задание:</b> {topic['task_text']}
-
-<b>Требования:</b>
-• Приведите три примера
-• Каждый пример должен быть конкретным
-• Избегайте абстрактных формулировок
-• Указывайте детали (имена, даты, места)
-
-💡 <i>Отправьте ваш ответ одним сообщением</i>"""
+@safe_handler()
+@validate_state_transition({TASK19_WAITING})
+async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка ответа пользователя на задание 19 (текст или фото)."""
     
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("⬅️ Выбрать другую тему", callback_data="t19_practice")
-    ]])
-    
-    # Отправляем новое сообщение
-    sent_msg = await query.message.chat.send_message(
-        text,
-        reply_markup=kb,
-        parse_mode=ParseMode.HTML
-    )
-    
-    # Сохраняем ID сообщения с заданием
-    context.user_data['task19_question_msg_id'] = sent_msg.message_id
-    
-    return states.ANSWERING
-
-async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка ответа пользователя."""
-    user_answer = update.message.text
+    user_id = update.effective_user.id
     topic = context.user_data.get('current_topic')
-    
-    # Сохраняем ID сообщения с ответом пользователя
-    context.user_data['task19_answer_msg_id'] = update.message.message_id
     
     if not topic:
         await update.message.reply_text(
-            "❌ Ошибка: тема не выбрана. Начните заново.",
+            "❌ Не найдена текущая тема. Начните заново.",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("📝 К заданиям", callback_data="t19_menu")
+                InlineKeyboardButton("⬅️ В меню", callback_data="t19_menu")
             ]])
         )
         return states.CHOOSING_MODE
+
+    # ========== ОБНОВЛЕНИЕ ДНЕВНОГО СТРИКА ==========
+    # Обновляем дневной стрик (если еще не обновлен сегодня)
+    current_date = date.today().isoformat()
+    last_activity_date = context.user_data.get('last_activity_date')
+
+    if last_activity_date != current_date:
+        daily_current, daily_max = await db.update_daily_streak(user_id)
+        context.user_data['last_activity_date'] = current_date
+        logger.info(f"[Task19] Daily streak updated for user {user_id}: {daily_current}/{daily_max}")
+
+    # Определяем тип ответа
+    user_answer = None
+    is_photo = False
     
-    # Показываем сообщение о проверке
-    thinking_msg = await show_thinking_animation(update.message, "Проверяю ваш ответ")
-    
-    # Сохраняем ID сообщения "Анализирую..."
-    context.user_data['task19_thinking_msg_id'] = thinking_msg.message_id
-    
-    result: Optional[EvaluationResult] = None
-
-    try:
-        # Проверяем наличие evaluator
-        if not evaluator:
-            # Простая проверка без AI
-            examples_count = len([line for line in user_answer.split('\n') if line.strip()])
-            score = min(examples_count, 3) if examples_count <= 3 else 0
-            result = EvaluationResult(
-                scores={"К1": score},
-                total_score=score,
-                max_score=3,
-                feedback="",
-                detailed_analysis={},
-                suggestions=[],
-                factual_errors=[],
-            )
-            feedback = f"📊 <b>Результаты проверки</b>\n\n"
-            feedback += f"<b>Тема:</b> {topic['title']}\n"
-            feedback += f"<b>Примеров найдено:</b> {examples_count}\n\n"
-
-            if examples_count >= 3:
-                feedback += "✅ Вы привели достаточное количество примеров.\n"
-            else:
-                feedback += "❌ Необходимо привести три примера.\n"
-
-            feedback += "\n⚠️ <i>AI-проверка недоступна. Обратитесь к преподавателю для детальной оценки.</i>"
-        else:
-            # AI-проверка
-            result = await evaluator.evaluate(
-                answer=user_answer,
-                topic=topic['title'],
-                task_text=topic['task_text'],
-                key_points=topic.get('key_points', [])
-            )
-            
-         if evaluator:
-            # Форматируем через универсальный форматтер
-            feedback = MessageFormatter.format_result_message(
-                score=total_score,
-                max_score=3,
-                topic=topic['title'],
-                details={
-                    f"Пример {i+1}": f"{'✅' if score > 0 else '❌'} {feedback}"
-                    for i, (score, feedback) in enumerate(detailed_scores)
-                }   
-            )
-        else:
-            # Простая оценка
-            feedback = MessageFormatter.format_result_message(
-                score=1,
-                max_score=3,
-                topic=topic['title'],
-                details={"Статус": "Требуется проверка преподавателем"}
-            )
-
-        score_val = result.total_score if result else 0
-        max_score_val = result.max_score if result else 3
-        motivation = get_motivational_message(score_val, max_score_val)
-        feedback += f"\n\n💬 {motivation}"
-        
-        # Адаптивная клавиатура на основе результата
-        kb = AdaptiveKeyboards.create_result_keyboard(
-            score=total_score if evaluator else 1,
-            max_score=3,
-            module_code="t19"
-        )
-        
-        # Удаляем сообщение "Анализирую..."
-        try:
-            await thinking_msg.delete()
-        except Exception:
-            pass
-        
-        # Отправляем результат
-        result_msg = await update.message.reply_text(
-            feedback,
-            kb = AdaptiveKeyboards.create_result_keyboard(
-                score=total_score if evaluator else 1,
-                max_score=3,
-                module_code="t19"
-            )
+    # Обработка фото (новый функционал)
+    if update.message.photo:
+        is_photo = True
+        thinking_msg = await update.message.reply_text(
+            "📸 Распознаю рукописный текст...\n"
+            "<i>Это может занять несколько секунд</i>",
             parse_mode=ParseMode.HTML
         )
         
+        try:
+            # Используем Vision API для распознавания
+            vision_service = get_vision_service()
+            photo = update.message.photo[-1]  # Берем самое большое фото
+            
+            # Формируем контекст для улучшения OCR-коррекции
+            topic_title = topic.get('title', '') if isinstance(topic, dict) else str(topic)
+            ocr_context = f"ЕГЭ обществознание, задание 19 (примеры к терминам/понятиям), тема: {topic_title}"
+
+            result = await vision_service.process_telegram_photo(
+                photo,
+                context.bot,
+                task_context=ocr_context
+            )
+            
+            if result['success']:
+                user_answer = result['text']
+                confidence = result.get('confidence', 0)
+
+                # Показываем распознанный текст для подтверждения
+                # Экранируем HTML-символы для безопасного отображения
+                preview = user_answer[:500] + ('...' if len(user_answer) > 500 else '')
+                preview_escaped = html.escape(preview)
+
+                confirm_text = (
+                    "✅ <b>Текст распознан!</b>\n\n"
+                    f"<i>Уверенность: {confidence:.0%}</i>\n\n"
+                    "📝 <b>Распознанный текст:</b>\n"
+                    f"<code>{preview_escaped}</code>\n\n"
+                    "Проверить этот ответ?"
+                )
+
+                # Сохраняем в контексте для последующего использования
+                context.user_data['pending_answer'] = user_answer
+                context.user_data['pending_topic'] = topic
+                
+                # Клавиатура подтверждения
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("✅ Проверить", callback_data="t19_confirm_ocr"),
+                        InlineKeyboardButton("✏️ Редактировать", callback_data="t19_edit_ocr")
+                    ],
+                    [
+                        InlineKeyboardButton("🔄 Другое фото", callback_data="t19_retry_photo"),
+                        InlineKeyboardButton("❌ Отмена", callback_data="t19_practice")
+                    ]
+                ])
+                
+                await thinking_msg.edit_text(
+                    confirm_text,
+                    reply_markup=keyboard,
+                    parse_mode=ParseMode.HTML
+                )
+
+                # Устанавливаем состояние явно
+                state_validator.set_state(update.effective_user.id, states.CHOOSING_MODE)
+
+                return states.CHOOSING_MODE
+                
+            else:
+                # Ошибка распознавания
+                error_msg = result.get('error', 'Не удалось распознать текст')
+                warning = result.get('warning', '')
+                
+                await thinking_msg.edit_text(
+                    f"❌ <b>Ошибка распознавания</b>\n\n"
+                    f"{error_msg}\n"
+                    f"{warning}\n\n"
+                    "💡 <i>Советы для лучшего распознавания:</i>\n"
+                    "• Убедитесь, что текст четкий\n"
+                    "• Используйте хорошее освещение\n"
+                    "• Держите камеру ровно\n"
+                    "• Пишите разборчиво",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🔄 Попробовать снова", callback_data="t19_retry"),
+                        InlineKeyboardButton("✏️ Ввести текстом", callback_data="t19_retry")
+                    ]]),
+                    parse_mode=ParseMode.HTML
+                )
+                return states.CHOOSING_MODE
+                
+        except Exception as e:
+            logger.error(f"Error processing photo: {e}")
+            await thinking_msg.edit_text(
+                "❌ Ошибка обработки фото. Попробуйте ввести ответ текстом.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✏️ Ввести текстом", callback_data="t19_retry")
+                ]])
+            )
+            return states.CHOOSING_MODE
+    
+    # Обработка текстового ответа (существующий функционал)
+    else:
+        user_answer = update.message.text.strip()
+
+        # Сохраняем ID сообщения с ответом пользователя
+        context.user_data['task19_answer_msg_id'] = update.message.message_id
+
+        # Проверяем минимальную длину
+        if len(user_answer) < 50:
+            await update.message.reply_text(
+                "❌ Ответ слишком короткий. Приведите три развернутых примера.\n\n"
+                "💡 Можете также отправить фото рукописного ответа!",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔄 Попробовать снова", callback_data="t19_retry")
+                ]])
+            )
+            return TASK19_WAITING
+    
+    # === ПРОВЕРКА ЛИМИТОВ (новый функционал) ===
+    freemium_manager = get_freemium_manager(
+        context.bot_data.get('subscription_manager')
+    )
+    
+    # Определяем модуль для task19
+    module_code = 'task19'
+    
+    # Проверяем лимит для модуля task19
+    can_use, remaining, limit_msg = await freemium_manager.check_ai_limit(user_id, module_code)
+    
+    if not can_use:
+        # Лимит исчерпан - показываем улучшенное сообщение с CTA
+        await update.message.reply_text(
+            f"{limit_msg}",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🎁 Попробовать за 1₽", callback_data="subscribe_start")],
+                [InlineKeyboardButton("💎 Оформить подписку", callback_data="subscribe_start")],
+                [InlineKeyboardButton("📝 В меню", callback_data="t19_menu")]
+            ]),
+            parse_mode=ParseMode.HTML
+        )
+        return states.CHOOSING_MODE
+    
+    # Показываем оставшиеся проверки для модуля
+    limit_info = await freemium_manager.get_limit_info(user_id, module_code)
+    limit_display = freemium_manager.format_limit_message(limit_info)
+
+    # Отправляем информацию о лимитах если нужно
+    if limit_display:
+        await update.message.reply_text(
+            limit_display,
+            parse_mode=ParseMode.HTML
+        )
+
+    # Показываем анимацию проверки
+    thinking_msg = await show_ai_evaluation_animation(
+        update.message,
+        duration=35  # 35 секунд для task19
+    )
+
+    # Сохраняем ID сообщения "думаю"
+    context.user_data['task19_thinking_msg_id'] = thinking_msg.message_id
+
+    # Регистрируем использование проверки для модуля
+    await freemium_manager.use_ai_check(user_id, module_code)
+    
+    try:
+        # === AI ПРОВЕРКА (с разной детализацией) ===
+        # Используем глобальную переменную evaluator
+
+        # Определяем уровень детализации
+        is_premium = limit_info['is_premium']
+
+        # Для premium - полная проверка
+        # Для free - базовая проверка
+        evaluation_mode = 'full' if is_premium else 'basic'
+
+        result = await evaluator.evaluate(
+            user_answer,
+            topic,
+            task_text=topic.get('task_text', ''),
+            mode=evaluation_mode  # Передаем режим проверки
+        )
+
         # Сохраняем результат
-        context.user_data.setdefault('task19_results', []).append({
-            'topic': topic['title'],
-            'score': total_score if evaluator else 1,
-            'max_score': 3,
-            'timestamp': datetime.now().isoformat()
-        })
+        score = result.total_score
+        save_result_task19(context, topic, score)
 
-        # Обновляем стрик правильных ответов
-        score_val = result.total_score if result else 0
-        max_score_val = result.max_score if result else 3
-        if score_val == max_score_val:
-            context.user_data['correct_streak'] = context.user_data.get('correct_streak', 0) + 1
+        # Формируем фидбек с учетом уровня подписки
+        if is_premium:
+            feedback_text = _format_evaluation_result(result)
         else:
-            context.user_data['correct_streak'] = 0
+            # Упрощенный фидбек для бесплатных пользователей
+            detailed_feedback = _format_evaluation_result(result)
+            feedback_text = freemium_manager.simplify_feedback_for_freemium(
+                detailed_feedback,
+                score,
+                result.max_score
+            )
 
-        if context.user_data['correct_streak'] in [3, 5, 10, 20, 50, 100]:
-            await show_streak_notification(update, context, 'correct', context.user_data['correct_streak'])
+        # Обновляем лимиты в сообщении
+        new_limit_info = await freemium_manager.get_limit_info(user_id)
+        new_limit_display = freemium_manager.format_limit_message(new_limit_info)
+
+        # Клавиатура после проверки
+        after_check_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🆕 Новое задание", callback_data="t19_new")],
+            [InlineKeyboardButton("🔄 Попробовать снова", callback_data="t19_retry")],
+            [InlineKeyboardButton("📝 В меню", callback_data="t19_menu")]
+        ])
+
+        await thinking_msg.edit_text(
+            f"{new_limit_display}\n\n{feedback_text}",
+            reply_markup=after_check_keyboard,
+            parse_mode=ParseMode.HTML
+        )
+
+        # Обновляем ID - теперь это сообщение с результатом
+        context.user_data.pop('task19_thinking_msg_id', None)
+        context.user_data['task19_result_msg_id'] = thinking_msg.message_id
+
+        # Сохраняем для возврата
+        context.user_data['t19_last_screen'] = 'feedback'
+        context.user_data['t19_last_feedback'] = {
+            'text': f"{new_limit_display}\n\n{feedback_text}",
+            'score': score,
+            'topic': topic
+        }
         
         return states.CHOOSING_MODE
-            
+        
+    except Exception as e:
+        logger.error(f"Error in handle_answer: {e}")
+        await thinking_msg.delete()
+        
+        await update.message.reply_text(
+            "❌ Произошла ошибка при проверке. Попробуйте еще раз.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔄 Попробовать снова", callback_data="t19_retry"),
+                InlineKeyboardButton("📝 В меню", callback_data="t19_menu")
+            ]])
+        )
+        return states.CHOOSING_MODE
 
+def save_result_task19(context: ContextTypes.DEFAULT_TYPE, topic: Dict, score: int):
+    """Сохраняет результат проверки для task19 с изолированным хранилищем."""
+
+    if 'task19_results' not in context.user_data:
+        context.user_data['task19_results'] = []
+    
+    if isinstance(topic, dict):
+        topic_id = topic.get('id', 0)
+        topic_title = topic.get('title', 'Неизвестная тема')
+        block = topic.get('block', 'Общие темы')
+        task_text = topic.get('task_text', '')
+    else:
+        topic_id = hash(str(topic)) % 10000
+        topic_title = str(topic)
+        block = 'Общие темы'
+        task_text = ''
+    
+    result = {
+        'topic_id': topic_id,
+        'topic': topic_title,
+        'topic_title': topic_title,
+        'block': block,
+        'score': score,
+        'max_score': 3,
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'task_text': task_text[:100] if task_text else ''
+    }
+    
+    context.user_data['task19_results'].append(result)
+    
+    # ИЗМЕНЕНИЕ: Используем task19_practice_stats вместо practice_stats
+    if 'task19_practice_stats' not in context.user_data:
+        context.user_data['task19_practice_stats'] = {}
+    
+    topic_id_str = str(topic_id)
+    
+    if topic_id_str not in context.user_data['task19_practice_stats']:
+        context.user_data['task19_practice_stats'][topic_id_str] = {
+            'attempts': 0,
+            'scores': [],
+            'last_attempt': None,
+            'best_score': 0,
+            'topic_title': topic_title,
+            'topic_id': topic_id,
+            'module': 'task19'
+        }
+    
+    topic_stats = context.user_data['task19_practice_stats'][topic_id_str]
+    topic_stats['attempts'] += 1
+    topic_stats['scores'].append(score)
+    topic_stats['last_attempt'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    topic_stats['best_score'] = max(topic_stats.get('best_score', 0), score)
+    topic_stats['topic_title'] = topic_title
+    
+    if score >= 2:
+        context.user_data['correct_streak'] = context.user_data.get('correct_streak', 0) + 1
+    else:
+        context.user_data['correct_streak'] = 0
+    
+    return result
+
+@safe_handler()
+async def handle_new_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка кнопки 'Новое задание'."""
+    query = update.callback_query
+    await query.answer()
+    
+    # Переходим к выбору новой темы
+    return await practice_mode(update, context)
+
+def _build_topic_message(topic: Dict) -> str:
+    """Строит сообщение с заданием для темы."""
+    text = f"""📝 <b>Задание 19</b>
+
+<b>Тема:</b> {topic.get('title', 'Неизвестная тема')}
+
+<b>Задание:</b>
+{topic.get('task_text', 'Текст задания не найден')}
+
+<b>Требования:</b>
+• Приведите ТРИ примера
+• Каждый пример должен быть конкретным
+• Используйте имена, даты, места
+• Избегайте общих фраз
+
+💡 <i>Отправьте ваш ответ текстом или документом</i>"""
+    
+    return text
+
+@safe_handler()
+async def handle_retry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка кнопки 'Попробовать снова'."""
+    query = update.callback_query
+    await query.answer()
+    
+    topic = context.user_data.get('current_topic')
+    if topic:
+        # Проверяем формат topic
+        if isinstance(topic, str):
+            # Ищем полный объект
+            for t in task19_data.get('topics', []):
+                if t.get('title') == topic:
+                    topic = t
+                    context.user_data['current_topic'] = topic
+                    break
+            else:
+                await query.answer("❌ Ошибка: тема не найдена", show_alert=True)
+                return await return_to_menu(update, context)
+        
+        text = _build_topic_message(topic)
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("⬅️ Выбрать другую тему", callback_data="t19_practice")
+        ]])
+        
+        await query.edit_message_text(
+            text, 
+            reply_markup=kb, 
+            parse_mode=ParseMode.HTML
+        )
+        
+        # Устанавливаем состояние
+        state_validator.set_state(query.from_user.id, TASK19_WAITING)
+        
+        return TASK19_WAITING
+    else:
+        await query.answer("❌ Ошибка: тема не найдена", show_alert=True)
+        return await return_to_menu(update, context)
+
+@safe_handler()
+async def handle_show_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка кнопки 'Мой прогресс'."""
+    return await show_progress_enhanced(update, context)
+
+@safe_handler()
+async def handle_theory(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка кнопки 'Изучить теорию'."""
+    return await theory_mode(update, context)
+
+@safe_handler()
+async def handle_examples(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка кнопки 'Примеры'."""
+    return await examples_bank(update, context)
+
+@safe_handler()
+async def handle_achievements(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка кнопки 'Достижения'."""
+    return await show_achievements(update, context)
+
+@safe_handler()
+async def handle_show_ideal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка кнопки 'Посмотреть эталон'."""
+    query = update.callback_query
+    await query.answer("Эта функция находится в разработке", show_alert=True)
+    return states.CHOOSING_MODE
+
+async def _basic_evaluation(answer: str, topic: Any) -> tuple[int, str]:
+    """Базовая оценка без AI."""
+    # Получаем название темы независимо от формата
+    if isinstance(topic, dict):
+        topic_title = topic.get('title', 'Неизвестная тема')
+    elif isinstance(topic, str):
+        topic_title = topic
+    else:
+        topic_title = 'Неизвестная тема'
+    
+    # Базовая проверка количества примеров
+    lines = [line.strip() for line in answer.split('\n') if line.strip()]
+    examples_count = 0
+    
+    # Простой подсчет примеров по номерам или буллетам
+    for line in lines:
+        if any(line.startswith(marker) for marker in ['1.', '2.', '3.', '•', '-', '*', '1)', '2)', '3)']):
+            examples_count += 1
+    
+    # Оценка
+    if examples_count >= 3 and len(answer) > 200:
+        score = 3
+        feedback = f"✅ Хорошо! Вы привели {examples_count} примера. "
+    elif examples_count >= 2 and len(answer) > 150:
+        score = 2
+        feedback = f"👍 Неплохо! Засчитано {examples_count} примера. "
+    elif examples_count >= 1 and len(answer) > 100:
+        score = 1
+        feedback = "📝 Засчитан 1 пример. "
+    else:
+        score = 0
+        feedback = "❌ Примеры не засчитаны. "
+    
+    # Дополнительная обратная связь
+    if score == 3:
+        feedback += "Все примеры засчитаны."
+    elif score > 0:
+        feedback += f"💡 Неплохо, но можно лучше. Добавьте больше деталей в примеры."
+    else:
+        feedback += "❌ Примеры не засчитаны. Убедитесь, что они конкретные и развернутые."
+    
+    return score, feedback
+
+def _format_evaluation_result(result) -> str:
+    """Форматирование результата проверки AI."""
+    # Безопасное получение значений
+    if isinstance(result, dict):
+        score = result.get('total_score', 0)
+        max_score = result.get('max_score', 3)
+        feedback_text = result.get('feedback', '')
+        suggestions = result.get('suggestions', [])
+        detailed = result.get('detailed_feedback', {})
+    else:
+        score = getattr(result, 'total_score', 0)
+        max_score = getattr(result, 'max_score', 3)
+        feedback_text = getattr(result, 'feedback', '')
+        suggestions = getattr(result, 'suggestions', [])
+        detailed = getattr(result, 'detailed_feedback', {})
+    
+    # Преобразуем в int
+    score = int(score)
+    max_score = int(max_score)
+    
+    # Заголовок в зависимости от результата
+    percentage = (score / max_score * 100) if max_score > 0 else 0
+    
+    if percentage >= 90:
+        header = "🎉 <b>Отличный результат!</b>"
+    elif percentage >= 60:
+        header = "👍 <b>Хороший результат!</b>"
+    elif percentage >= 30:
+        header = "📝 <b>Неплохо, но есть над чем поработать</b>"
+    else:
+        header = "❌ <b>Нужно больше практики</b>"
+    
+    # Основная информация
+    feedback = f"{header}\n\n"
+    feedback += f"<b>Ваш балл:</b> {score} из {max_score}\n\n"
+    
+    # Детальный разбор (если есть)
+    if detailed and isinstance(detailed, dict):
+        feedback += "<b>📊 Анализ ответа:</b>\n"
+        
+        # Информация о примерах
+        valid_count = detailed.get('valid_examples_count', 0)
+        total_count = detailed.get('total_examples', 0)
+        
+        if total_count > 0:
+            feedback += f"• Всего примеров: {total_count}\n"
+            feedback += f"• Засчитано: {valid_count}\n"
+            
+            # Штрафы
+            if detailed.get('penalty_applied'):
+                reason = detailed.get('penalty_reason', 'нарушение требований')
+                feedback += f"• ⚠️ Применен штраф: {reason}\n"
+        
+        feedback += "\n"
+    
+    # Краткая обратная связь от AI
+    if feedback_text:
+        feedback += f"<b>💭 Комментарий:</b>\n{feedback_text}\n\n"
+    
+    # Рекомендации (без дублирования)
+    if suggestions and isinstance(suggestions, list):
+        unique_suggestions = []
+        seen = set()
+        for s in suggestions:
+            if s and s not in seen:
+                unique_suggestions.append(s)
+                seen.add(s)
+        
+        if unique_suggestions:
+            feedback += "<b>💡 Рекомендации:</b>\n"
+            for suggestion in unique_suggestions[:3]:
+                feedback += f"• {suggestion}\n"
+    
+    return feedback.strip()
+
+@safe_handler()
+@validate_state_transition({TASK19_WAITING})
 async def handle_answer_document_task19(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка примеров из документа для task19."""
     
-    # Проверяем состояние
     topic = context.user_data.get('current_topic')
     if not topic:
         await update.message.reply_text(
             "❌ Ошибка: тема не выбрана."
         )
         return ConversationHandler.END
+
+    # Обработка старого формата (если topic - строка)
+    if isinstance(topic, str):
+        # Ищем полный объект темы
+        for t in task19_data.get('topics', []):
+            if t.get('title') == topic:
+                topic = t
+                context.user_data['current_topic'] = topic
+                break
+        else:
+            await update.message.reply_text(
+                "❌ Ошибка: данные темы не найдены."
+            )
+            return ConversationHandler.END
     
     # Обрабатываем документ
     extracted_text = await DocumentHandlerMixin.handle_document_answer(
@@ -795,7 +1159,7 @@ async def handle_answer_document_task19(update: Update, context: ContextTypes.DE
     )
     
     if not extracted_text:
-        return states.WAITING_ANSWER
+        return TASK19_WAITING
     
     # Валидация
     is_valid, error_msg = DocumentHandlerMixin.validate_document_content(
@@ -805,16 +1169,77 @@ async def handle_answer_document_task19(update: Update, context: ContextTypes.DE
     
     if not is_valid:
         await update.message.reply_text(f"❌ {error_msg}")
-        return states.WAITING_ANSWER
+        return TASK19_WAITING
     
-    # Передаем в обычный обработчик
-    update.message.text = extracted_text
+    # ИСПРАВЛЕНИЕ: Сохраняем текст в контексте
+    context.user_data['document_text'] = extracted_text
+
+    # Вызываем обычный обработчик
     return await handle_answer(update, context)
 
+
+@safe_handler()
+async def handle_answer_photo_task19(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка примеров с фотографии для task19."""
+
+    topic = context.user_data.get('current_topic')
+    if not topic:
+        await update.message.reply_text(
+            "❌ Ошибка: тема не выбрана."
+        )
+        return ConversationHandler.END
+
+    # Обработка старого формата (если topic - строка)
+    if isinstance(topic, str):
+        # Ищем полный объект темы
+        for t in task19_data.get('topics', []):
+            if t.get('title') == topic:
+                topic = t
+                context.user_data['current_topic'] = topic
+                break
+        else:
+            await update.message.reply_text(
+                "❌ Ошибка: данные темы не найдены."
+            )
+            return ConversationHandler.END
+
+    # Формируем контекст для улучшения OCR-коррекции
+    topic_title = topic.get('title', '') if isinstance(topic, dict) else str(topic)
+    ocr_context = f"ЕГЭ обществознание, задание 19 (примеры к терминам/понятиям), тема: {topic_title}"
+
+    # Обрабатываем фото через OCR
+    extracted_text = await process_photo_message(
+        update,
+        context.application.bot,
+        task_name="примеры",
+        task_context=ocr_context
+    )
+
+    if not extracted_text:
+        return TASK19_WAITING
+
+    # Валидация
+    is_valid, error_msg = DocumentHandlerMixin.validate_document_content(
+        extracted_text,
+        task_type="examples"
+    )
+
+    if not is_valid:
+        await update.message.reply_text(f"❌ {error_msg}")
+        return TASK19_WAITING
+
+    # Сохраняем текст в контексте
+    context.user_data['document_text'] = extracted_text
+
+    # Вызываем обычный обработчик
+    return await handle_answer(update, context)
+
+
+@safe_handler()
+@validate_state_transition({states.CHOOSING_MODE})
 async def theory_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показ теории и советов."""
     query = update.callback_query
-    await query.answer()
     
     text = """📚 <b>Теория по заданию 19</b>
 
@@ -854,10 +1279,19 @@ async def theory_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return states.CHOOSING_MODE
 
 
+@safe_handler()
+@validate_state_transition({states.CHOOSING_MODE})
 async def examples_bank(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показ банка примеров."""
+    """Показ банка эталонных примеров."""
     query = update.callback_query
-    await query.answer()
+    
+    # ДОБАВЛЕНО: Проверка и повторная загрузка данных при необходимости
+    if not task19_data or not task19_data.get('topics'):
+        logger.warning("Task19 data not loaded when accessing examples bank")
+        await query.answer("⏳ Загружаю данные...", show_alert=False)
+        
+        # Пытаемся загрузить данные
+        await init_task19_data()
     
     # Показываем первую тему с примерами
     if task19_data.get('topics'):
@@ -874,15 +1308,43 @@ async def examples_bank(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         text += "💡 <i>Обратите внимание на структуру и конкретность примеров!</i>"
         
+        # Проверяем, откуда пришел пользователь
+        last_screen = context.user_data.get('t19_last_screen')
+        
+        # Формируем кнопки навигации
+        kb_buttons = []
+        
+        # Если пришли из результатов, добавляем кнопку возврата
+        if last_screen == 'feedback':
+            kb_buttons.append([
+                InlineKeyboardButton("⬅️ Вернуться к результатам", callback_data="t19_back_to_feedback")
+            ])
+        
+        # Остальные кнопки
+        kb_buttons.extend([
+            [InlineKeyboardButton("➡️ Следующая тема", callback_data="t19_bank_nav:1")],
+            [InlineKeyboardButton("🔍 Поиск темы", callback_data="t19_bank_search")],
+            [InlineKeyboardButton("⬅️ В меню", callback_data="t19_menu")]
+        ])
+        
+        kb = InlineKeyboardMarkup(kb_buttons)
+        
+    else:
+        # ИСПРАВЛЕНО: Более информативное сообщение об ошибке
+        text = """📚 <b>Банк примеров</b>
+
+❌ <b>Не удалось загрузить банк примеров</b>
+
+Возможные причины:
+• Файл с данными отсутствует или поврежден
+• Проблемы с правами доступа к файлу
+
+Пожалуйста, обратитесь к администратору."""
+        
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➡️ Следующая тема", callback_data="t19_bank_next:1")],
+            [InlineKeyboardButton("🔄 Попробовать снова", callback_data="t19_examples")],
             [InlineKeyboardButton("⬅️ Назад", callback_data="t19_menu")]
         ])
-    else:
-        text = "📚 <b>Банк примеров</b>\n\nБанк примеров пуст."
-        kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("⬅️ Назад", callback_data="t19_menu")
-        ]])
     
     await query.edit_message_text(
         text,
@@ -891,10 +1353,45 @@ async def examples_bank(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return states.CHOOSING_MODE
 
+@safe_handler()
+async def back_to_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Возврат к экрану с результатами проверки."""
+    query = update.callback_query
+    
+    # Получаем сохраненные данные
+    last_feedback = context.user_data.get('t19_last_feedback')
+    
+    if not last_feedback:
+        await query.answer("Результаты не найдены", show_alert=True)
+        return await return_to_menu(update, context)
+    
+    # Восстанавливаем экран с результатами
+    feedback_text = last_feedback['text']
+    score = last_feedback['score']
+    
+    # Формируем клавиатуру как после проверки
+    kb = AdaptiveKeyboards.create_result_keyboard(
+        score=score,
+        max_score=3,
+        module_code="t19"
+    )
+    
+    await query.edit_message_text(
+        feedback_text,
+        reply_markup=kb,
+        parse_mode=ParseMode.HTML
+    )
+    
+    # Восстанавливаем контекст
+    context.user_data['t19_last_screen'] = 'feedback'
+    
+    return states.CHOOSING_MODE
+
+@safe_handler()
+@validate_state_transition({states.CHOOSING_MODE})
 async def bank_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Навигация по банку примеров."""
     query = update.callback_query
-    await query.answer()
     
     current_idx = int(query.data.split(":")[1])
     topics = task19_data.get('topics', [])
@@ -947,95 +1444,22 @@ async def bank_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return states.CHOOSING_MODE
 
 
-async def my_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показ прогресса пользователя."""
-    query = update.callback_query
-    await query.answer()
-    
-    results = context.user_data.get('task19_results', [])
-    
-    if not results:
-        text = MessageFormatter.format_welcome_message(
-            "задание 19", 
-            is_new_user=True
-        )
-        kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("💪 Начать практику", callback_data="t19_practice"),
-            InlineKeyboardButton("⬅️ Назад", callback_data="t19_menu")
-        ]])
-    else:
-        # Собираем статистику
-        total_attempts = len(results)
-        total_score = sum(r['score'] for r in results)
-        max_possible = sum(r['max_score'] for r in results)
-        avg_score = total_score / total_attempts
-        
-        # Анализ по темам для топ результатов
-        topic_stats = {}
-        for result in results:
-            topic = result['topic']
-            if topic not in topic_stats:
-                topic_stats[topic] = []
-            topic_stats[topic].append(result['score'])
-        
-        # Топ темы
-        top_results = []
-        for topic, scores in topic_stats.items():
-            avg = sum(scores) / len(scores)
-            top_results.append({
-                'topic': topic,
-                'score': avg,
-                'max_score': 3
-            })
-        top_results.sort(key=lambda x: x['score'], reverse=True)
-        
-        # Форматируем сообщение универсальным способом
-        text = MessageFormatter.format_progress_message({
-            'total_attempts': total_attempts,
-            'average_score': avg_score,
-            'completed': len(topic_stats),
-            'total': 50,  # Предполагаем 50 тем
-            'total_time': 0,  # Можно добавить подсчет времени
-            'top_results': top_results[:3],
-            'current_average': avg_score * 33.33,
-            'previous_average': (avg_score * 33.33) - 5
-        }, "заданию 19")
-        
-        # Адаптивная клавиатура
-        kb = AdaptiveKeyboards.create_progress_keyboard(
-            has_detailed_stats=True,
-            can_export=True,
-            module_code="t19"
-        )
-    
-    await query.edit_message_text(
-        text,
-        reply_markup=kb,
-        parse_mode=ParseMode.HTML
-    )
-    return states.CHOOSING_MODE
 
-
-async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Возврат в главное меню."""
-    from core.plugin_loader import build_main_menu
-    
-    query = update.callback_query
-    await query.answer()
-    
-    await query.edit_message_text(
-        "👋 Выберите раздел для изучения:",
-        reply_markup=build_main_menu()
-    )
-    return ConversationHandler.END
-
-
+@safe_handler()
 async def return_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Возврат в меню задания 19."""
+    """Возврат в меню task19."""
     query = update.callback_query
+    
+    # Автоматическая миграция при возврате
+    ensure_module_migration(context, 'task19', task19_data)  # Передаем context, НЕ context.user_data!
+    
+    # Устанавливаем активный модуль
+    set_active_module(context)
+    
+    # Отвечаем на callback, чтобы убрать "часики"
     await query.answer()
     
-    # Получаем статистику для адаптивного меню
+    # Получаем статистику пользователя
     results = context.user_data.get('task19_results', [])
     user_stats = {
         'total_attempts': len(results),
@@ -1043,6 +1467,182 @@ async def return_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'streak': context.user_data.get('correct_streak', 0),
         'weak_topics_count': 0,
         'progress_percent': int(len(set(r['topic'] for r in results)) / 50 * 100) if results else 0
+    }
+    
+    # Формируем приветствие
+    greeting = get_personalized_greeting(user_stats)
+    text = greeting + MessageFormatter.format_welcome_message(
+        "задание 19",
+        is_new_user=user_stats['total_attempts'] == 0
+    )
+    
+    # Создаем адаптивную клавиатуру
+    kb = AdaptiveKeyboards.create_menu_keyboard(user_stats, module_code="t19")
+    
+    # Показываем меню
+    await query.edit_message_text(
+        text,
+        reply_markup=kb,
+        parse_mode=ParseMode.HTML
+    )
+    
+    # Возвращаем состояние CHOOSING_MODE для работы с меню
+    return states.CHOOSING_MODE
+
+@safe_handler()
+async def handle_result_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка действий после показа результата."""
+    query = update.callback_query
+    
+    # Обрабатываем оба варианта callback_data (с полным и коротким префиксом)
+    action = query.data
+    if action.startswith("task19_"):
+        action = action.replace("task19_", "t19_")
+    
+    if action == "t19_new":
+        # Показываем меню выбора темы
+        return await practice_mode(update, context)
+    
+    elif action == "t19_retry":
+        # Удаляем предыдущие сообщения перед повторной попыткой
+        await delete_previous_messages(context, query.message.chat_id)
+
+        # Показываем то же задание заново
+        topic = context.user_data.get('current_topic')
+        if topic:
+            text = _build_topic_message(topic)
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Выбрать другую тему", callback_data="t19_practice")
+            ]])
+
+            await query.edit_message_text(
+                text,
+                reply_markup=kb,
+                parse_mode=ParseMode.HTML
+            )
+
+            # Сохраняем ID сообщения с вопросом
+            context.user_data['task19_question_msg_id'] = query.message.message_id
+
+            # Устанавливаем состояние
+            state_validator.set_state(query.from_user.id, TASK19_WAITING)
+
+            return TASK19_WAITING
+        else:
+            await query.answer("❌ Ошибка: тема не найдена", show_alert=True)
+            return await return_to_menu(update, context)
+    
+    elif action == "t19_menu":
+        # Возвращаемся в главное меню задания
+        return await return_to_menu(update, context)
+    
+    elif action == "t19_progress":
+        # Показываем прогресс
+        return await show_progress_enhanced(update, context)
+    
+    elif action == "t19_show_ideal":
+        # Показываем идеальный ответ (если реализовано)
+        await query.answer("Эта функция находится в разработке", show_alert=True)
+        return states.CHOOSING_MODE
+    
+    else:
+        # Неизвестное действие
+        await query.answer("Неизвестное действие", show_alert=True)
+        return states.CHOOSING_MODE
+
+@safe_handler()
+async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Возврат в главное меню бота."""
+    from core.menu_handlers import handle_to_main_menu
+    return await handle_to_main_menu(update, context)
+
+
+@safe_handler()
+async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена текущего действия."""
+    await update.message.reply_text("Действие отменено.")
+    # Возвращаемся в главное меню task19
+    return await cmd_task19(update, context)
+
+@safe_handler()
+async def noop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пустой обработчик для неактивных кнопок."""
+    query = update.callback_query
+    # Ничего не делаем, просто отвечаем на callback
+
+def migrate_task19_data(context: ContextTypes.DEFAULT_TYPE):
+    """Миграция данных task19 из общего practice_stats в изолированное хранилище."""
+    
+    # Если уже есть изолированное хранилище, пропускаем миграцию
+    if 'task19_practice_stats' in context.user_data:
+        return
+    
+    # Создаем изолированное хранилище
+    context.user_data['task19_practice_stats'] = {}
+    
+    # Если есть общий practice_stats, пытаемся извлечь данные task19
+    if 'practice_stats' in context.user_data and task19_data and 'topics' in task19_data:
+        # Получаем все topic_id из task19
+        task19_topic_ids = {str(t.get('id', 0)) for t in task19_data['topics']}
+        
+        # Копируем только темы task19 в изолированное хранилище
+        for topic_id_str, topic_data in context.user_data['practice_stats'].items():
+            if topic_id_str in task19_topic_ids:
+                context.user_data['task19_practice_stats'][topic_id_str] = topic_data.copy()
+                # Добавляем идентификатор модуля
+                context.user_data['task19_practice_stats'][topic_id_str]['module'] = 'task19'
+    
+    # Также мигрируем из task19_results если они есть
+    if 'task19_results' in context.user_data:
+        for result in context.user_data['task19_results']:
+            topic_id_str = str(result.get('topic_id', 0))
+            
+            # Если этой темы еще нет в practice_stats
+            if topic_id_str not in context.user_data['task19_practice_stats']:
+                context.user_data['task19_practice_stats'][topic_id_str] = {
+                    'attempts': 1,
+                    'scores': [result['score']],
+                    'last_attempt': result.get('timestamp'),
+                    'best_score': result['score'],
+                    'topic_title': result.get('topic_title', result.get('topic', 'Неизвестная тема')),
+                    'topic_id': result.get('topic_id'),
+                    'module': 'task19'
+                }
+
+async def reset_progress_task19(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Полный сброс прогресса task19."""
+    query = update.callback_query
+    
+    # Сбрасываем ТОЛЬКО данные task19
+    context.user_data.pop('task19_results', None)
+    context.user_data.pop('task19_practice_stats', None)  # Изолированное хранилище
+    context.user_data.pop('task19_achievements', None)
+    
+    await query.answer("✅ Прогресс по заданию 19 сброшен!", show_alert=True)
+    return await return_to_menu(update, context)
+
+@safe_handler()
+async def cmd_task19(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /task19."""
+    # ИСПРАВЛЕНИЕ: Вызываем миграцию данных в изолированное хранилище
+    migrate_task19_data(context)  # Добавить эту строку если её нет
+    
+    # Устанавливаем активный модуль
+    set_active_module(context)
+    
+    # Используем изолированное хранилище для статистики
+    results = context.user_data.get('task19_results', [])
+    task19_stats = context.user_data.get('task19_practice_stats', {})  # Изолированное хранилище
+    
+    # Подсчитываем статистику из изолированного хранилища
+    total_attempts = sum(data.get('attempts', 0) for data in task19_stats.values())
+    
+    user_stats = {
+        'total_attempts': total_attempts,
+        'average_score': sum(r['score'] for r in results) / len(results) if results else 0,
+        'streak': context.user_data.get('correct_streak', 0),
+        'weak_topics_count': 0,
+        'progress_percent': int(len(task19_stats) / 50 * 100) if task19_stats else 0
     }
     
     greeting = get_personalized_greeting(user_stats)
@@ -1053,211 +1653,18 @@ async def return_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     kb = AdaptiveKeyboards.create_menu_keyboard(user_stats, module_code="t19")
     
-    await query.edit_message_text(
-        text,
-        reply_markup=kb,
-        parse_mode=ParseMode.HTML
-    )
-    
-    return states.CHOOSING_MODE
-
-async def handle_result_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка действий после показа результата."""
-    query = update.callback_query
-    await query.answer()
-    
-    if query.data == "t19_new":
-        # Удаляем все сообщения перед показом списка тем
-        await delete_previous_messages(context, query.message.chat_id)
-        
-        # Показываем меню выбора темы
-        return await practice_mode(update, context)
-    
-    elif query.data == "t19_retry":
-        # Удаляем все сообщения и показываем то же задание заново
-        await delete_previous_messages(context, query.message.chat_id)
-        
-        topic = context.user_data.get('current_topic')
-        if topic:
-            text = _build_topic_message(topic)
-            kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("⬅️ Выбрать другую тему", callback_data="t19_practice")
-            ]])
-            
-            msg = await query.message.chat.send_message(
-                text, 
-                reply_markup=kb, 
-                parse_mode=ParseMode.HTML
-            )
-            
-            # Сохраняем ID нового сообщения
-            context.user_data['task19_question_msg_id'] = msg.message_id
-            
-            return states.ANSWERING
-        else:
-            await query.message.chat.send_message(
-                "❌ Ошибка: тема не найдена",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("📝 К заданиям", callback_data="t19_menu")
-                ]])
-            )
-            return states.CHOOSING_MODE
-    
-    elif query.data == "t19_menu":
-        # Удаляем все сообщения и показываем главное меню задания
-        await delete_previous_messages(context, query.message.chat_id)
-        return await return_to_menu(update, context)
-    
-    elif query.data == "t19_progress":
-        # Показываем прогресс (не удаляем сообщения)
-        return await my_progress(update, context)
-
-async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена текущего действия."""
-    await update.message.reply_text("Действие отменено.")
-    return await cmd_task19(update, context)
-
-async def noop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Пустой обработчик для неактивных кнопок."""
-    query = update.callback_query
-    await query.answer()
-    # Ничего не делаем, просто отвечаем на callback
-
-async def reset_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Сброс результатов пользователя."""
-    query = update.callback_query
-    await query.answer()
-    
-    # Проверяем, есть ли подтверждение
-    if context.user_data.get('confirm_reset_task19'):
-        # Сбрасываем результаты
-        context.user_data['task19_results'] = []
-        context.user_data.pop('confirm_reset_task19', None)
-        
-        await query.answer("✅ Результаты сброшены", show_alert=True)
-        
-        # Возвращаемся в меню
-        return await return_to_menu(update, context)
-    else:
-        # Запрашиваем подтверждение
-        context.user_data['confirm_reset_task19'] = True
-        
-        text = """⚠️ <b>Подтверждение сброса</b>
-
-Вы действительно хотите сбросить все результаты по заданию 19?
-
-Это действие нельзя отменить!"""
-        
-        kb = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("❌ Да, сбросить", callback_data="t19_reset_confirm"),
-                InlineKeyboardButton("✅ Отмена", callback_data="t19_menu")
-            ]
-        ])
-        
-        await query.edit_message_text(
-            text,
-            reply_markup=kb,
-            parse_mode=ParseMode.HTML
-        )
-        
-        return states.CHOOSING_MODE
-
-
-# Добавить в меню "Мой прогресс" кнопку сброса:
-async def my_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показ прогресса пользователя."""
-    query = update.callback_query
-    await query.answer()
-    
-    results = context.user_data.get('task19_results', [])
-    
-    if not results:
-        text = "📊 <b>Ваш прогресс</b>\n\nВы еще не решали задания."
-        kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("⬅️ Назад", callback_data="t19_menu")
-        ]])
-    else:
-        total_attempts = len(results)
-        total_score = sum(r['score'] for r in results)
-        max_possible = sum(r['max_score'] for r in results)
-        avg_score = total_score / total_attempts
-        
-        # Визуальный прогресс-бар
-        progress_percent = int(total_score / max_possible * 100) if max_possible > 0 else 0
-        filled = "█" * (progress_percent // 10)
-        empty = "░" * (10 - progress_percent // 10)
-        progress_bar = f"{filled}{empty}"
-        
-        text = f"""📊 <b>Ваш прогресс по заданию 19</b>
-
-📈 Прогресс: {progress_bar} {progress_percent}%
-📝 Решено заданий: {total_attempts}
-⭐ Средний балл: {avg_score:.1f}/3
-🏆 Общий результат: {total_score}/{max_possible}
-
-<b>Последние попытки:</b>"""
-        
-        for result in results[-5:]:
-            score_emoji = "🟢" if result['score'] == 3 else "🟡" if result['score'] >= 2 else "🔴"
-            text += f"\n{score_emoji} {result['topic']}: {result['score']}/3"
-        
-        # Рекомендации
-        if avg_score < 2:
-            text += "\n\n💡 <b>Совет:</b> Изучите теорию и примеры эталонных ответов."
-        elif avg_score < 2.5:
-            text += "\n\n💡 <b>Совет:</b> Обратите внимание на конкретизацию примеров."
-        else:
-            text += "\n\n🎉 <b>Отлично!</b> Вы хорошо справляетесь с заданием 19!"
-        
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📊 Детальная статистика", callback_data="t19_detailed_progress")],
-            [InlineKeyboardButton("📤 Экспорт результатов", callback_data="t19_export")],
-            [InlineKeyboardButton("🔄 Сбросить результаты", callback_data="t19_reset_confirm")],
-            [InlineKeyboardButton("⬅️ Назад", callback_data="t19_menu")]
-        ])
-    
-    await query.edit_message_text(
-        text,
-        reply_markup=kb,
-        parse_mode=ParseMode.HTML
-    )
-    return states.CHOOSING_MODE
-
-async def cmd_task19_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /task19_settings для быстрого доступа к настройкам."""
-    current_level = evaluator.strictness if evaluator else StrictnessLevel.STRICT
-    
-    text = f"""⚙️ <b>Быстрые настройки задания 19</b>
-
-Текущий уровень проверки: <b>{current_level.value}</b>
-
-Используйте кнопки ниже для изменения:"""
-    
-    kb_buttons = []
-    for level in StrictnessLevel:
-        emoji = "✅" if level == current_level else ""
-        kb_buttons.append([
-            InlineKeyboardButton(
-                f"{emoji} {level.value}",
-                callback_data=f"t19_set_strictness:{level.name}"
-            )
-        ])
-    
     await update.message.reply_text(
         text,
-        reply_markup=InlineKeyboardMarkup(kb_buttons),
+        reply_markup=kb,
         parse_mode=ParseMode.HTML
     )
     
     return states.CHOOSING_MODE
 
-# Добавить в handlers.py:
-
+@safe_handler()
 async def bank_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Поиск темы в банке примеров."""
     query = update.callback_query
-    await query.answer()
     
     await query.edit_message_text(
         "🔍 <b>Поиск в банке примеров</b>\n\n"
@@ -1272,6 +1679,7 @@ async def bank_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return states.SEARCHING
 
 
+@safe_handler()
 async def handle_bank_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка поискового запроса в банке примеров."""
     if not context.user_data.get('waiting_for_bank_search'):
@@ -1306,6 +1714,7 @@ async def handle_bank_search(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return states.CHOOSING_MODE
 
 
+@safe_handler()
 async def show_examples_for_topic_message(message, context: ContextTypes.DEFAULT_TYPE, topic_idx: int):
     """Показывает примеры для темы (для обычных сообщений, не callback)."""
     topics = task19_data.get('topics', [])
@@ -1393,72 +1802,14 @@ def generate_examples_for_topic(topic: Dict) -> str:
 Фильм "Челюсти" режиссера А. Учителя собрал в российском прокате 1,2 млрд рублей за первый месяц, став самым кассовым российским фильмом 2023 года."""
 
 
-# Оптимизированная загрузка данных с кэшированием
-_topics_cache = None
-_topics_cache_time = None
-
-async def init_task19_data():
-    """Инициализация данных для задания 19 с кэшированием."""
-    global task19_data, _topics_cache, _topics_cache_time
-    
-    # Проверяем кэш (обновляем раз в час)
-    if _topics_cache and _topics_cache_time:
-        if (datetime.now() - _topics_cache_time).seconds < 3600:
-            task19_data = _topics_cache
-            logger.info("Loaded task19 data from cache")
-            return
-    
-    data_file = os.path.join(os.path.dirname(__file__), "task19_topics.json")
-    
-    try:
-        with open(data_file, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-
-        # Поддержка двух форматов данных: список тем или словарь блоков
-        if isinstance(raw, list):
-            topics_list = raw
-        else:
-            topics_list = []
-            for block_name, block in raw.get("blocks", {}).items():
-                for topic in block.get("topics", []):
-                    topic["block"] = block_name
-                    topics_list.append(topic)
-
-        all_topics = []
-        topic_by_id = {}
-        topics_by_block = {}
-
-        for topic in topics_list:
-            block_name = topic.get("block", "Без категории")
-            all_topics.append(topic)
-            topic_by_id[topic["id"]] = topic
-            topics_by_block.setdefault(block_name, []).append(topic)
-
-        task19_data = {
-            "topics": all_topics,
-            "topic_by_id": topic_by_id,
-            "topics_by_block": topics_by_block,
-            "blocks": {b: {"topics": t} for b, t in topics_by_block.items()},
-        }
-
-        _topics_cache = raw
-        _topics_cache_time = datetime.now()
-        
-        logger.info(f"Loaded {len(all_topics)} topics for task19")
-    except Exception as e:
-        logger.error(f"Failed to load task19 data: {e}")
-        task19_data = {"topics": [], "blocks": {}, "topics_by_block": {}}
-
-
+@safe_handler()
 async def export_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Экспорт результатов в файл."""
     query = update.callback_query
-    await query.answer()
     
     results = context.user_data.get('task19_results', [])
     
     if not results:
-        await query.answer("Нет результатов для экспорта", show_alert=True)
         return states.CHOOSING_MODE
     
     # Создаем текст для экспорта
@@ -1540,10 +1891,253 @@ async def export_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     return states.CHOOSING_MODE
 
+@safe_handler()
+async def handle_confirm_ocr(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение распознанного текста и отправка на проверку."""
+    query = update.callback_query
+    await query.answer()
+    
+    user_answer = context.user_data.get('pending_answer')
+    topic = context.user_data.get('pending_topic')
+    
+    if not user_answer or not topic:
+        await query.edit_message_text(
+            "❌ Ошибка: данные не найдены. Начните заново.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔄 Начать заново", callback_data="t19_practice")
+            ]])
+        )
+        return states.CHOOSING_MODE
+    
+    # Очищаем временные данные
+    context.user_data.pop('pending_answer', None)
+    context.user_data.pop('pending_topic', None)
+    
+    # Отправляем на проверку (используем существующую логику)
+    user_id = update.effective_user.id
+    
+    # Проверка лимитов
+    freemium_manager = get_freemium_manager(
+        context.bot_data.get('subscription_manager')
+    )
+
+    # Определяем модуль для task19
+    module_code = 'task19'
+
+    can_use, remaining, limit_msg = await freemium_manager.check_ai_limit(user_id, module_code)
+
+    if not can_use:
+        await query.edit_message_text(
+            limit_msg,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🎁 Попробовать за 1₽", callback_data="subscribe_start")],
+                [InlineKeyboardButton("💎 Оформить подписку", callback_data="subscribe_start")],
+                [InlineKeyboardButton("📝 В меню", callback_data="t19_menu")]
+            ]),
+            parse_mode=ParseMode.HTML
+        )
+        return states.CHOOSING_MODE
+
+    # Показываем оставшиеся проверки для модуля
+    limit_info = await freemium_manager.get_limit_info(user_id, module_code)
+    limit_display = freemium_manager.format_limit_message(limit_info)
+
+    # Удаляем старое сообщение с подтверждением OCR
+    try:
+        await query.message.delete()
+    except Exception as e:
+        logger.debug(f"Failed to delete OCR confirmation message: {e}")
+
+    # Отправляем информацию о лимитах если нужно
+    if limit_display:
+        await query.message.reply_text(
+            limit_display,
+            parse_mode=ParseMode.HTML
+        )
+
+    # Показываем анимацию проверки
+    thinking_msg = await show_ai_evaluation_animation(
+        query.message,
+        duration=35  # 35 секунд для task19
+    )
+
+    # Сохраняем ID сообщения "думаю"
+    context.user_data['task19_thinking_msg_id'] = thinking_msg.message_id
+
+    # Регистрируем использование проверки для модуля
+    await freemium_manager.use_ai_check(user_id, module_code)
+
+    try:
+        # === AI ПРОВЕРКА (с разной детализацией) ===
+        # Используем глобальную переменную evaluator
+
+        # Определяем уровень детализации
+        is_premium = limit_info['is_premium']
+
+        # Для premium - полная проверка
+        # Для free - базовая проверка
+        evaluation_mode = 'full' if is_premium else 'basic'
+
+        result = await evaluator.evaluate(
+            user_answer,
+            topic,
+            task_text=topic.get('task_text', ''),
+            mode=evaluation_mode  # Передаем режим проверки
+        )
+
+        # Сохраняем результат
+        score = result.total_score
+        save_result_task19(context, topic, score)
+
+        # Формируем фидбек с учетом уровня подписки
+        if is_premium:
+            feedback_text = _format_evaluation_result(result)
+        else:
+            # Упрощенный фидбек для бесплатных пользователей
+            detailed_feedback = _format_evaluation_result(result)
+            feedback_text = freemium_manager.simplify_feedback_for_freemium(
+                detailed_feedback,
+                score,
+                result.max_score
+            )
+
+        # Обновляем лимиты в сообщении
+        new_limit_info = await freemium_manager.get_limit_info(user_id)
+        new_limit_display = freemium_manager.format_limit_message(new_limit_info)
+
+        # Клавиатура после проверки
+        after_check_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🆕 Новое задание", callback_data="t19_new")],
+            [InlineKeyboardButton("🔄 Попробовать снова", callback_data="t19_retry")],
+            [InlineKeyboardButton("📝 В меню", callback_data="t19_menu")]
+        ])
+
+        await thinking_msg.edit_text(
+            f"{new_limit_display}\n\n{feedback_text}",
+            reply_markup=after_check_keyboard,
+            parse_mode=ParseMode.HTML
+        )
+
+        # Сохраняем для возврата
+        context.user_data['t19_last_screen'] = 'feedback'
+        context.user_data['t19_last_feedback'] = {
+            'text': f"{new_limit_display}\n\n{feedback_text}",
+            'score': score,
+            'topic': topic
+        }
+
+        return states.CHOOSING_MODE
+
+    except Exception as e:
+        logger.error(f"Error in handle_confirm_ocr: {e}")
+        await thinking_msg.delete()
+
+        await query.message.reply_text(
+            "❌ Произошла ошибка при проверке. Попробуйте еще раз.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔄 Попробовать снова", callback_data="t19_retry"),
+                InlineKeyboardButton("📝 В меню", callback_data="t19_menu")
+            ]])
+        )
+        return states.CHOOSING_MODE
+
+@safe_handler()
+async def handle_edit_ocr(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Редактирование распознанного текста."""
+    query = update.callback_query
+    await query.answer()
+
+    user_answer = context.user_data.get('pending_answer', '')
+
+    # Экранируем HTML-символы для безопасного отображения
+    preview = user_answer[:300] + ('...' if len(user_answer) > 300 else '')
+    preview_escaped = html.escape(preview)
+
+    await query.edit_message_text(
+        "✏️ <b>Редактирование ответа</b>\n\n"
+        "Отправьте исправленный текст ответа.\n\n"
+        f"<b>Распознанный текст:</b>\n"
+        f"<code>{preview_escaped}</code>",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ Отмена", callback_data="t19_practice")
+        ]]),
+        parse_mode=ParseMode.HTML
+    )
+    
+    # Устанавливаем состояние ожидания отредактированного текста
+    state_validator.set_state(query.from_user.id, TASK19_WAITING)
+
+    return TASK19_WAITING
+
+
+async def handle_retry_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Повторная загрузка фото для OCR."""
+    query = update.callback_query
+    await query.answer()
+
+    # Очищаем временные данные
+    context.user_data.pop('pending_answer', None)
+
+    topic = context.user_data.get('pending_topic') or context.user_data.get('current_topic')
+
+    if not topic:
+        await query.edit_message_text(
+            "❌ Ошибка: тема не найдена. Начните заново.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔄 Начать заново", callback_data="t19_practice")
+            ]])
+        )
+        return states.CHOOSING_MODE
+
+    await query.edit_message_text(
+        "📸 <b>Загрузите новое фото</b>\n\n"
+        "Отправьте фотографию с вашими примерами.\n\n"
+        "💡 <i>Советы для лучшего распознавания:</i>\n"
+        "• Убедитесь, что текст четкий\n"
+        "• Используйте хорошее освещение\n"
+        "• Держите камеру ровно\n"
+        "• Пишите разборчиво",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✏️ Ввести текстом", callback_data="t19_retry"),
+            InlineKeyboardButton("❌ Отмена", callback_data="t19_practice")
+        ]]),
+        parse_mode=ParseMode.HTML
+    )
+
+    # Переводим в состояние ожидания фото
+    state_validator.set_state(query.from_user.id, TASK19_WAITING)
+
+    return TASK19_WAITING
+
+
+# ============== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ==============
+def format_basic_feedback_task19(result: EvaluationResult, topic: Dict) -> str:
+    """Формирует упрощенный фидбек для бесплатных пользователей."""
+    score = result.total_score
+    max_score = result.max_score
+    
+    text = f"📊 <b>Результат: {score}/{max_score} баллов</b>\n\n"
+    
+    # Общая оценка
+    if score == max_score:
+        text += "✅ Хороший ответ!\n"
+    elif score > 0:
+        text += "⚠️ Есть недочеты\n"
+    else:
+        text += "❌ Требуется доработка\n"
+    
+    # Базовые рекомендации
+    text += "\n💡 <b>Общие рекомендации:</b>\n"
+    text += "• Приводите конкретные примеры\n"
+    text += "• Избегайте общих фраз\n"
+    text += "• Следите за фактической точностью\n"
+    
+    return text
+
+@safe_handler()
 async def detailed_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показ детального прогресса по блокам."""
     query = update.callback_query
-    await query.answer()
     
     results = context.user_data.get('task19_results', [])
     
@@ -1616,51 +2210,26 @@ async def detailed_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return states.CHOOSING_MODE
 
+@safe_handler()
+@validate_state_transition({states.CHOOSING_MODE})
 async def settings_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Настройки проверки."""
     query = update.callback_query
-    await query.answer()
-    
-    current_level = evaluator.strictness if evaluator else StrictnessLevel.STRICT
-    
-    text = f"""⚙️ <b>Настройки проверки</b>
 
-<b>Текущий уровень:</b> {current_level.value}
+    results = context.user_data.get('task19_results', [])
+    achievements = context.user_data.get('task19_achievements', [])
 
-<b>Описание уровней:</b>
+    text = """⚙️ <b>Настройки задания 19</b>
 
-🟢 <b>Базовый</b>
-• Проверка наличия 3 примеров
-• Базовая проверка соответствия теме
-• Подходит для начинающих
+<b>Проверка:</b> экспертный уровень (критерии ФИПИ)
 
-🟡 <b>Стандартный</b>
-• Проверка развернутости примеров
-• Выявление очевидных ошибок
-• Рекомендуется для подготовки
+Используйте кнопки ниже для управления прогрессом."""
 
-🔴 <b>Строгий</b> (рекомендуется)
-• Детальная проверка фактов
-• Проверка соответствия законодательству РФ
-• Выявление всех типов ошибок
+    kb_buttons = [
+        [InlineKeyboardButton("🔄 Сбросить прогресс", callback_data="t19_reset_progress")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="t19_menu")]
+    ]
 
-🔥 <b>Экспертный</b>
-• Максимальная строгость
-• Проверка актуальности данных
-• Как на реальном экзамене"""
-    
-    kb_buttons = []
-    for level in StrictnessLevel:
-        emoji = "✅" if level == current_level else ""
-        kb_buttons.append([
-            InlineKeyboardButton(
-                f"{emoji} {level.value}",
-                callback_data=f"t19_set_strictness:{level.name}"
-            )
-        ])
-    
-    kb_buttons.append([InlineKeyboardButton("⬅️ Назад", callback_data="t19_menu")])
-    
     await query.edit_message_text(
         text,
         reply_markup=InlineKeyboardMarkup(kb_buttons),
@@ -1669,25 +2238,543 @@ async def settings_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return states.CHOOSING_MODE
 
 
-async def set_strictness(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Установка уровня строгости."""
-    global evaluator
-    
+@safe_handler()
+async def cmd_task19_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда быстрого доступа к настройкам task19."""
+    text = """⚙️ <b>Настройки задания 19</b>
+
+<b>Проверка:</b> экспертный уровень (критерии ФИПИ)"""
+
+    kb_buttons = [
+        [InlineKeyboardButton("🔄 Сбросить прогресс", callback_data="t19_reset_progress")],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="to_main_menu")]
+    ]
+
+    await update.message.reply_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(kb_buttons),
+        parse_mode=ParseMode.HTML
+    )
+
+    return states.CHOOSING_MODE
+
+@safe_handler()
+async def handle_theory_sections(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка разделов теории."""
     query = update.callback_query
-    await query.answer()
+    section = query.data.replace("t19_", "")
     
-    level_str = query.data.split(":")[1].upper()
+    # Содержание для разных разделов
+    theory_content = {
+        'how_to_write': {
+            'title': 'Как писать примеры',
+            'content': """📝 <b>Как правильно приводить примеры</b>
+
+<b>1. Структура примера:</b>
+- Конкретное событие или явление
+- Указание времени и места (если важно)
+- Краткое описание сути
+- Связь с аргументом
+
+<b>2. Требования:</b>
+- Достоверность и проверяемость
+- Конкретность (не абстрактные рассуждения)
+- Релевантность теме
+- Краткость и ёмкость
+
+<b>3. Избегайте:</b>
+- Вымышленных примеров
+- Слишком общих формулировок
+- Примеров без связи с темой
+- Повторов и тавтологии"""
+        },
+        'good_examples': {
+            'title': 'Удачные примеры',
+            'content': """✅ <b>Примеры хороших формулировок</b>
+
+<b>Пример 1:</b>
+"Великая Отечественная война показала силу духа советского народа: блокада Ленинграда продолжалась 872 дня, но город не сдался."
+
+<b>Почему хорошо:</b>
+- Конкретное событие
+- Точные данные
+- Ясная связь с темой
+
+<b>Пример 2:</b>
+"Реформы Петра I кардинально изменили Россию: строительство Санкт-Петербурга, создание флота, введение Табели о рангах."
+
+<b>Почему хорошо:</b>
+- Перечислены конкретные реформы
+- Показан масштаб изменений
+- Примеры подтверждают тезис"""
+        },
+        'common_mistakes': {
+            'title': 'Частые ошибки',
+            'content': """❌ <b>Типичные ошибки в примерах</b>
+
+<b>1. Слишком общие формулировки:</b>
+❌ "Многие войны показывают героизм"
+✅ "Сталинградская битва показала героизм"
+
+<b>2. Отсутствие конкретики:</b>
+❌ "Известный учёный сделал открытие"
+✅ "Менделеев открыл периодический закон"
+
+<b>3. Неточные данные:</b>
+❌ "В прошлом веке была война"
+✅ "Первая мировая война 1914-1918 гг."
+
+<b>4. Примеры не по теме:</b>
+❌ Пример про экономику к теме культуры
+✅ Пример строго по заданной теме"""
+        },
+        'useful_phrases': {
+            'title': 'Полезные фразы',
+            'content': """💬 <b>Фразы-связки для примеров</b>
+
+<b>Для введения примера:</b>
+- "Ярким примером является..."
+- "Это подтверждается..."
+- "Показательным является..."
+- "Можно привести пример..."
+
+<b>Для связи с аргументом:</b>
+- "Этот пример демонстрирует..."
+- "Данное событие подтверждает..."
+- "Это свидетельствует о..."
+- "Таким образом, мы видим..."
+
+<b>Для перехода между примерами:</b>
+- "Другим примером служит..."
+- "Также можно отметить..."
+- "Не менее важным является..."
+- "Кроме того, стоит упомянуть..." """
+        }
+    }
+    
+    section_data = theory_content.get(section)
+    
+    if section_data:
+        text = f"📚 <b>{section_data['title']}</b>\n\n{section_data['content']}"
+    else:
+        text = f"📚 Раздел <b>{section}</b> находится в разработке."
+    
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("⬅️ К теории", callback_data="t19_theory")
+    ]])
+    
+    await query.edit_message_text(
+        text, 
+        reply_markup=kb, 
+        parse_mode=ParseMode.HTML
+    )
+    return states.CHOOSING_MODE
+
+
+@safe_handler()
+async def handle_settings_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Placeholder for settings related callbacks."""
+    query = update.callback_query
+    action = query.data.replace("t19_", "")
+    if action == "reset_progress":
+        await query.edit_message_text(
+            "⚠️ Действие сброса прогресса недоступно в этой версии.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="t19_settings")]]),
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        await query.edit_message_text(
+            "✅ Прогресс не сброшен.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="t19_settings")]]),
+            parse_mode=ParseMode.HTML,
+        )
+    return states.CHOOSING_MODE
+
+@safe_handler()
+async def retry_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Повторить задание по конкретной теме из работы над ошибками."""
+    query = update.callback_query
+    topic_id = query.data.split(':')[1]
+    
+    # Ищем задания по этой теме
+    topic_questions = []
+    topic_name = None
+    
+    for block_data in task19_data.values():
+        for topic, questions in block_data.items():
+            if questions and len(questions) > 0:
+                if questions[0].get('topic_id') == topic_id:
+                    topic_questions = questions
+                    topic_name = topic
+                    break
+        if topic_questions:
+            break
+    
+    if not topic_questions:
+        await query.answer("Тема не найдена", show_alert=True)
+        return states.CHOOSING_MODE
+    
+    # Выбираем случайный вопрос
+    question = random.choice(topic_questions)
+    context.user_data['task19_current_question'] = question
+    context.user_data['task19_retry_mode'] = True  # Флаг режима работы над ошибками
+    
+    text = f"🔧 <b>Работа над ошибками</b>\n"
+    text += f"📚 Тема: <i>{topic_name}</i>\n\n"
+    text += f"<b>{question['question']}</b>\n\n"
+    text += "Приведите конкретный пример из истории."
+    
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("❌ Отмена", callback_data="t19_mistakes")
+    ]])
+    
+    await query.edit_message_text(
+        text,
+        reply_markup=kb,
+        parse_mode=ParseMode.HTML
+    )
+    
+    return states.TASK19_WAITING
+
+
+
+
+@safe_handler()
+async def show_achievement_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать детали конкретного достижения."""
+    query = update.callback_query
+    achievement_id = query.data.split(':')[1]
+    
+    # Детальные описания достижений
+    achievement_details = {
+        'first_example': {
+            'name': '🌟 Первый пример',
+            'desc': 'Вы привели свой первый корректный пример!',
+            'tips': 'Это только начало! Продолжайте практиковаться для улучшения навыка.'
+        },
+        'perfect_5': {
+            'name': '🎯 Пять идеалов',
+            'desc': 'Получено 5 отличных оценок за примеры!',
+            'tips': 'Вы отлично усвоили принципы. Попробуйте более сложные темы!'
+        },
+        'explorer_10': {
+            'name': '🗺️ Исследователь',
+            'desc': 'Изучено 10 разных тем!',
+            'tips': 'Широкий кругозор - ключ к успеху на экзамене.'
+        },
+        'master_50': {
+            'name': '🏆 Мастер примеров',
+            'desc': 'Выполнено 50 заданий с высоким средним баллом!',
+            'tips': 'Вы настоящий эксперт! Помогите другим освоить это задание.'
+        }
+    }
+    
+    details = achievement_details.get(achievement_id)
+    if not details:
+        await query.answer("Достижение не найдено", show_alert=True)
+        return states.CHOOSING_MODE
+    
+    has_achievement = achievement_id in context.user_data.get('task19_achievements', set())
+    
+    text = f"{details['name']}\n\n"
+    text += f"📝 <b>Описание:</b>\n{details['desc']}\n\n"
+    
+    if has_achievement:
+        text += f"✅ <b>Получено!</b>\n\n"
+        text += f"💡 <b>Совет:</b>\n{details['tips']}"
+    else:
+        text += "🔒 <b>Еще не получено</b>\n\n"
+        text += "Продолжайте практиковаться!"
+    
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("⬅️ К достижениям", callback_data="t19_achievements")
+    ]])
+    
+    await query.edit_message_text(
+        text,
+        reply_markup=kb,
+        parse_mode=ParseMode.HTML
+    )
+    
+    return states.CHOOSING_MODE
+
+@safe_handler()
+async def achievement_ok(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки OK в уведомлении о достижении."""
+    query = update.callback_query
     
     try:
-        new_level = StrictnessLevel[level_str]
-        evaluator = Task19AIEvaluator(strictness=new_level)
-        
-        await query.answer(f"✅ Установлен уровень: {new_level.value}", show_alert=True)
-        
-        # Возвращаемся в настройки
-        return await settings_mode(update, context)
-        
-    except Exception as e:
-        logger.error(f"Error setting strictness: {e}")
-        await query.answer("❌ Ошибка изменения настроек", show_alert=True)
+        await query.message.delete()
+    except:
+        pass
+    
+    await query.answer()
+    return None  # Не меняем состояние
+
+@safe_handler()
+async def show_ideal_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать эталонный ответ."""
+    query = update.callback_query
+    
+    current_question = context.user_data.get('task19_current_question')
+    if not current_question:
+        await query.answer("Вопрос не найден", show_alert=True)
         return states.CHOOSING_MODE
+    
+    ideal_examples = current_question.get('examples', [])
+    if not ideal_examples:
+        await query.answer("Эталонные примеры не найдены", show_alert=True)
+        return states.CHOOSING_MODE
+    
+    text = "💎 <b>Эталонные примеры:</b>\n\n"
+    
+    for i, example in enumerate(ideal_examples[:3], 1):
+        text += f"<b>Пример {i}:</b>\n"
+        text += f"{example}\n\n"
+    
+    text += "💡 <b>Обратите внимание:</b>\n"
+    text += "• Конкретность формулировок\n"
+    text += "• Точные даты и факты\n"
+    text += "• Связь с темой вопроса\n"
+    text += "• Краткость и ёмкость"
+    
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Попробовать снова", callback_data="t19_retry")],
+        [InlineKeyboardButton("📝 Новое задание", callback_data="t19_new")],
+        [InlineKeyboardButton("⬅️ В меню", callback_data="t19_menu")]
+    ])
+    
+    await query.edit_message_text(
+        text,
+        reply_markup=kb,
+        parse_mode=ParseMode.HTML
+    )
+    
+    return states.CHOOSING_MODE
+
+@safe_handler()
+async def reset_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сброс результатов - показывает подтверждение."""
+    query = update.callback_query
+    
+    results = context.user_data.get('task19_results', [])
+    achievements = context.user_data.get('task19_achievements', set())
+    
+    if not results:
+        await query.answer("Нет данных для сброса", show_alert=True)
+        return states.CHOOSING_MODE
+    
+    text = (
+        "⚠️ <b>Сброс прогресса</b>\n\n"
+        "Вы уверены, что хотите сбросить весь прогресс?\n\n"
+        f"Будет удалено:\n"
+        f"• {len(results)} результатов\n"
+        f"• {len(achievements)} достижений\n"
+        f"• Вся статистика\n\n"
+        "Это действие нельзя отменить!"
+    )
+    
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Да, сбросить", callback_data="t19_confirm_reset"),
+            InlineKeyboardButton("❌ Отмена", callback_data="t19_settings")
+        ]
+    ])
+    
+    await query.edit_message_text(
+        text,
+        reply_markup=kb,
+        parse_mode=ParseMode.HTML
+    )
+    
+    return states.CHOOSING_MODE
+
+async def show_achievement_notification(
+    message: Message, 
+    achievements: List[Dict],
+    context: ContextTypes.DEFAULT_TYPE
+):
+    """Показать красивое уведомление о новых достижениях."""
+    if not achievements:
+        return
+    
+    for achievement in achievements:
+        emoji = get_achievement_emoji(achievement['id'])
+        
+        text = f"{emoji} <b>Новое достижение!</b>\n\n"
+        text += f"🏅 <b>{achievement['name']}</b>\n"
+        text += f"📝 {achievement['desc']}\n\n"
+        
+        # Добавляем мотивационную фразу
+        motivational = [
+            "Отличная работа! Так держать! 🚀",
+            "Вы делаете успехи! Продолжайте! 💪",
+            "Превосходно! Новая вершина взята! 🏔️",
+            "Браво! Ваше мастерство растет! 📈"
+        ]
+        text += f"<i>{random.choice(motivational)}</i>"
+        
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("👍 Отлично!", callback_data="achievement_ok"),
+            InlineKeyboardButton("🏆 Все достижения", callback_data="t19_achievements")
+        ]])
+        
+        await message.reply_text(
+            text,
+            reply_markup=kb,
+            parse_mode=ParseMode.HTML
+        )
+        
+        # Небольшая задержка между уведомлениями
+        if len(achievements) > 1:
+            await asyncio.sleep(1)
+
+@safe_handler()
+@validate_state_transition({states.CHOOSING_MODE})
+async def mistakes_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Режим работы над ошибками."""
+    query = update.callback_query
+    
+    # Получаем результаты пользователя
+    results = context.user_data.get('task19_results', [])
+    
+    # Находим темы с низкими баллами (меньше 2)
+    low_score_topics = {}
+    for result in results:
+        if result.get('score', 0) < 2:
+            topic_id = result.get('topic_id')
+            if topic_id:
+                if topic_id not in low_score_topics:
+                    low_score_topics[topic_id] = {
+                        'count': 0,
+                        'avg_score': 0,
+                        'scores': []
+                    }
+                low_score_topics[topic_id]['count'] += 1
+                low_score_topics[topic_id]['scores'].append(result.get('score', 0))
+    
+    # Вычисляем средние баллы
+    for topic_id, data in low_score_topics.items():
+        data['avg_score'] = sum(data['scores']) / len(data['scores'])
+    
+    if not low_score_topics:
+        text = "👍 <b>Отличная работа!</b>\n\n"
+        text += "У вас нет тем с низкими баллами для повторения.\n"
+        text += "Продолжайте практиковаться для поддержания навыка!"
+        
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💪 К практике", callback_data="t19_practice")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="t19_menu")]
+        ])
+    else:
+        # Сортируем темы по среднему баллу (сначала худшие)
+        sorted_topics = sorted(low_score_topics.items(), 
+                             key=lambda x: x[1]['avg_score'])
+        
+        text = "🔧 <b>Работа над ошибками</b>\n\n"
+        text += "Темы, требующие внимания:\n\n"
+        
+        buttons = []
+        for i, (topic_id, data) in enumerate(sorted_topics[:5], 1):
+            # Получаем название темы из task19_data
+            topic_name = topic_id  # По умолчанию ID
+            for block_data in task19_data.values():
+                for topic, topic_data in block_data.items():
+                    if topic_data and len(topic_data) > 0 and topic_data[0].get('topic_id') == topic_id:
+                        topic_name = topic
+                        break
+            
+            avg_visual = UniversalUIComponents.create_score_visual(
+                data['avg_score'], 
+                3,  # Максимальный балл для task19
+                use_stars=False
+            )
+            
+            text += f"{i}. {topic_name}\n"
+            text += f"   Попыток: {data['count']}, Средний балл: {avg_visual}\n\n"
+            
+            buttons.append([InlineKeyboardButton(
+                f"📝 {topic_name[:30]}{'...' if len(topic_name) > 30 else ''}",
+                callback_data=f"t19_retry_topic:{topic_id}"
+            )])
+        
+        buttons.append([InlineKeyboardButton("⬅️ Назад", callback_data="t19_menu")])
+        kb = InlineKeyboardMarkup(buttons)
+        
+        text += "\n💡 <i>Выберите тему для повторения</i>"
+    
+    await query.edit_message_text(
+        text,
+        reply_markup=kb,
+        parse_mode=ParseMode.HTML
+    )
+    return states.CHOOSING_MODE
+
+
+@safe_handler()
+async def show_achievements(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать достижения пользователя."""
+    query = update.callback_query
+    
+    achievements = context.user_data.get('task19_achievements', set())
+    
+    # Определение всех возможных достижений
+    all_achievements = {
+        'first_example': ('🌟 Первый пример', 'Привести первый корректный пример'),
+        'perfect_5': ('🎯 Пять идеалов', 'Получить максимальный балл 5 раз'),
+        'explorer_10': ('🗺️ Исследователь', 'Изучить 10 разных тем'),
+        'persistent_20': ('💪 Упорство', 'Выполнить 20 заданий'),
+        'master_50': ('🏆 Мастер примеров', 'Выполнить 50 заданий со средним баллом выше 2'),
+        'speed_demon': ('⚡ Скорость', 'Дать правильный ответ менее чем за минуту'),
+        'comeback': ('🔥 Возвращение', 'Получить максимум после серии неудач')
+    }
+    
+    text = "🏅 <b>Ваши достижения в Задании 19</b>\n\n"
+    
+    # Полученные достижения
+    if achievements:
+        text += "<b>✅ Получено:</b>\n"
+        for ach_id in achievements:
+            if ach_id in all_achievements:
+                name, desc = all_achievements[ach_id]
+                emoji = get_achievement_emoji(ach_id)
+                text += f"{emoji} {name} - {desc}\n"
+        text += "\n"
+    
+    # Доступные достижения
+    not_achieved = set(all_achievements.keys()) - achievements
+    if not_achieved:
+        text += "<b>🔓 Доступно:</b>\n"
+        for ach_id in sorted(not_achieved):
+            name, desc = all_achievements[ach_id]
+            text += f"⚪ {name[2:]} - {desc}\n"
+    
+    # Прогресс
+    progress_bar = UniversalUIComponents.create_progress_bar(
+        len(achievements), 
+        len(all_achievements),
+        width=10
+    )
+    text += f"\n<b>📊 Прогресс:</b> {progress_bar}"
+    
+    # Мотивационное сообщение
+    percentage = len(achievements) / len(all_achievements) if all_achievements else 0
+    if percentage == 1:
+        text += "\n\n🎊 Поздравляем! Вы собрали все достижения!"
+    elif percentage >= 0.7:
+        text += "\n\n💪 Отличный прогресс! Осталось совсем немного!"
+    elif percentage >= 0.3:
+        text += "\n\n📈 Хороший старт! Продолжайте в том же духе!"
+    else:
+        text += "\n\n🌟 Каждое достижение - шаг к мастерству!"
+    
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("⬅️ Назад", callback_data="t19_progress")
+    ]])
+    
+    await query.edit_message_text(
+        text,
+        reply_markup=kb,
+        parse_mode=ParseMode.HTML
+    )
+    return states.CHOOSING_MODE

@@ -1,0 +1,311 @@
+{% extends "base.html" %}
+
+{% block title %}Генерация расписания{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1><i class="bi bi-magic"></i> Генерация расписания</h1>
+</div>
+
+<div class="row">
+    <div class="col-lg-8">
+        <!-- Параметры генерации -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-gear"></i> Параметры генерации</h5>
+            </div>
+            <div class="card-body">
+                <form id="generateForm">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Название расписания <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="scheduleName" required
+                                   placeholder="Расписание на 2 семестр" value="Расписание {{ now.strftime('%d.%m.%Y') }}">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Описание</label>
+                            <input type="text" class="form-control" id="scheduleDescription"
+                                   placeholder="Комментарий...">
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Действует с</label>
+                            <input type="date" class="form-control" id="validFrom">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Действует до</label>
+                            <input type="date" class="form-control" id="validTo">
+                        </div>
+                    </div>
+
+                    <hr>
+
+                    <h6><i class="bi bi-sliders"></i> Параметры алгоритма</h6>
+
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label">Максимум уроков в день</label>
+                            <input type="number" class="form-control" id="maxLessonsPerDay" value="7" min="5" max="8">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Минимум уроков в день</label>
+                            <input type="number" class="form-control" id="minLessonsPerDay" value="4" min="3" max="6">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Итераций оптимизации</label>
+                            <input type="number" class="form-control" id="iterations" value="1000" min="100" max="10000">
+                        </div>
+                    </div>
+
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="includeEge" checked>
+                        <label class="form-check-label" for="includeEge">
+                            Включить практикумы ЕГЭ
+                        </label>
+                    </div>
+
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="setActive" checked>
+                        <label class="form-check-label" for="setActive">
+                            Сделать активным (заменить текущее расписание)
+                        </label>
+                    </div>
+
+                    <button type="submit" class="btn btn-success btn-lg" id="generateBtn">
+                        <i class="bi bi-play-fill"></i> Сгенерировать расписание
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Прогресс генерации -->
+        <div class="card d-none" id="progressCard">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-hourglass-split"></i> Генерация...</h5>
+            </div>
+            <div class="card-body">
+                <div class="progress mb-3" style="height: 25px;">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated" id="progressBar" style="width: 0%">
+                        0%
+                    </div>
+                </div>
+                <p class="mb-0" id="progressStatus">Подготовка данных...</p>
+            </div>
+        </div>
+
+        <!-- Результат -->
+        <div class="card d-none" id="resultCard">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-check-circle"></i> Результат генерации</h5>
+            </div>
+            <div class="card-body">
+                <div class="row text-center mb-4">
+                    <div class="col-md-3">
+                        <h3 class="text-primary" id="resultLessons">0</h3>
+                        <small class="text-muted">Уроков размещено</small>
+                    </div>
+                    <div class="col-md-3">
+                        <h3 class="text-success" id="resultSuccess">0%</h3>
+                        <small class="text-muted">Успешность</small>
+                    </div>
+                    <div class="col-md-3">
+                        <h3 class="text-warning" id="resultConflicts">0</h3>
+                        <small class="text-muted">Конфликтов</small>
+                    </div>
+                    <div class="col-md-3">
+                        <h3 class="text-info" id="resultScore">0</h3>
+                        <small class="text-muted">Оценка качества</small>
+                    </div>
+                </div>
+
+                <div class="d-grid gap-2 d-md-flex justify-content-md-center">
+                    <a href="{{ url_for('schedule_view') }}" class="btn btn-primary" id="viewScheduleBtn">
+                        <i class="bi bi-eye"></i> Просмотреть расписание
+                    </a>
+                    <button class="btn btn-outline-secondary" onclick="location.reload()">
+                        <i class="bi bi-arrow-repeat"></i> Сгенерировать заново
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <!-- Статус данных -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-database"></i> Проверка данных</h5>
+            </div>
+            <div class="card-body">
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        Учителей
+                        <span class="badge bg-{{ 'success' if stats.teachers > 0 else 'danger' }} rounded-pill">
+                            {{ stats.teachers }}
+                        </span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        Кабинетов
+                        <span class="badge bg-{{ 'success' if stats.classrooms > 0 else 'danger' }} rounded-pill">
+                            {{ stats.classrooms }}
+                        </span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        Классов
+                        <span class="badge bg-{{ 'success' if stats.classes > 0 else 'danger' }} rounded-pill">
+                            {{ stats.classes }}
+                        </span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        Предметов
+                        <span class="badge bg-{{ 'success' if stats.subjects > 0 else 'danger' }} rounded-pill">
+                            {{ stats.subjects }}
+                        </span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        Записей нагрузки
+                        <span class="badge bg-{{ 'success' if stats.workloads > 0 else 'danger' }} rounded-pill">
+                            {{ stats.workloads }}
+                        </span>
+                    </li>
+                </ul>
+
+                {% if stats.teachers == 0 or stats.classes == 0 or stats.workloads == 0 %}
+                <div class="alert alert-warning mt-3 mb-0">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    Недостаточно данных для генерации. Добавьте учителей, классы и нагрузку.
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Существующие расписания -->
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-calendar3"></i> Существующие расписания</h5>
+            </div>
+            <div class="card-body">
+                {% if schedules %}
+                <ul class="list-group list-group-flush">
+                    {% for sch in schedules %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <div>
+                            {% if sch.is_active %}<span class="badge bg-success me-1">Активно</span>{% endif %}
+                            {{ sch.name }}
+                            <br><small class="text-muted">{{ sch.lessons.count() }} уроков</small>
+                        </div>
+                        <div class="btn-group btn-group-sm">
+                            <a href="{{ url_for('schedule_view') }}?id={{ sch.id }}" class="btn btn-outline-primary">
+                                <i class="bi bi-eye"></i>
+                            </a>
+                            <button class="btn btn-outline-danger" onclick="deleteSchedule({{ sch.id }}, '{{ sch.name }}')">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="text-muted mb-0">Нет сохранённых расписаний</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('generateForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+
+    const data = {
+        name: document.getElementById('scheduleName').value,
+        description: document.getElementById('scheduleDescription').value || null,
+        valid_from: document.getElementById('validFrom').value || null,
+        valid_to: document.getElementById('validTo').value || null,
+        max_lessons_per_day: parseInt(document.getElementById('maxLessonsPerDay').value),
+        min_lessons_per_day: parseInt(document.getElementById('minLessonsPerDay').value),
+        iterations: parseInt(document.getElementById('iterations').value),
+        include_ege: document.getElementById('includeEge').checked,
+        set_active: document.getElementById('setActive').checked
+    };
+
+    document.getElementById('generateBtn').disabled = true;
+    document.getElementById('progressCard').classList.remove('d-none');
+    document.getElementById('resultCard').classList.add('d-none');
+
+    // Симуляция прогресса
+    let progress = 0;
+    const progressBar = document.getElementById('progressBar');
+    const progressStatus = document.getElementById('progressStatus');
+    const statuses = [
+        'Загрузка данных...',
+        'Анализ нагрузки...',
+        'Размещение обязательных предметов...',
+        'Оптимизация расписания...',
+        'Проверка конфликтов...',
+        'Завершение...'
+    ];
+
+    const progressInterval = setInterval(() => {
+        progress += Math.random() * 15;
+        if (progress > 90) progress = 90;
+        progressBar.style.width = progress + '%';
+        progressBar.textContent = Math.round(progress) + '%';
+        progressStatus.textContent = statuses[Math.floor(progress / 20)] || statuses[0];
+    }, 500);
+
+    fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    })
+    .then(r => r.json())
+    .then(result => {
+        clearInterval(progressInterval);
+        progressBar.style.width = '100%';
+        progressBar.textContent = '100%';
+        progressBar.classList.remove('progress-bar-animated');
+
+        if (result.success) {
+            progressBar.classList.remove('bg-primary');
+            progressBar.classList.add('bg-success');
+            progressStatus.textContent = 'Готово!';
+
+            document.getElementById('resultCard').classList.remove('d-none');
+            document.getElementById('resultLessons').textContent = result.lessons_placed || 0;
+            document.getElementById('resultSuccess').textContent = (result.success_rate || 0) + '%';
+            document.getElementById('resultConflicts').textContent = result.conflicts || 0;
+            document.getElementById('resultScore').textContent = result.quality_score || 0;
+        } else {
+            progressBar.classList.remove('bg-primary');
+            progressBar.classList.add('bg-danger');
+            progressStatus.textContent = 'Ошибка: ' + (result.error || 'Неизвестная ошибка');
+        }
+
+        document.getElementById('generateBtn').disabled = false;
+    })
+    .catch(err => {
+        clearInterval(progressInterval);
+        progressBar.classList.remove('bg-primary', 'progress-bar-animated');
+        progressBar.classList.add('bg-danger');
+        progressStatus.textContent = 'Ошибка: ' + err.message;
+        document.getElementById('generateBtn').disabled = false;
+    });
+});
+
+function deleteSchedule(id, name) {
+    if (confirm(`Удалить расписание "${name}"?`)) {
+        fetch(`/api/schedules/${id}`, { method: 'DELETE' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) location.reload();
+                else alert(data.error);
+            });
+    }
+}
+</script>
+{% endblock %}

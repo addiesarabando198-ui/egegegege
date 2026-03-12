@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+
+{% block title %}Кабинеты{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1><i class="bi bi-door-open"></i> Кабинеты</h1>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#classroomModal" onclick="openClassroomModal()">
+        <i class="bi bi-plus-lg"></i> Добавить кабинет
+    </button>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>Номер</th>
+                        <th>Название</th>
+                        <th>Вместимость</th>
+                        <th>Этаж</th>
+                        <th>Корпус</th>
+                        <th width="120">Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for room in classrooms %}
+                    <tr>
+                        <td><strong>{{ room.number }}</strong></td>
+                        <td>{{ room.name or '—' }}</td>
+                        <td>{{ room.capacity }} мест</td>
+                        <td>{{ room.floor }}</td>
+                        <td>{{ room.building or '—' }}</td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary" onclick="editClassroom({{ room.id }})">
+                                <i class="bi bi-pencil"></i>
+                            </button>
+                            <button class="btn btn-sm btn-outline-danger" onclick="deleteClassroom({{ room.id }}, '{{ room.number }}')">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="text-center text-muted py-4">
+                            <i class="bi bi-inbox fs-1"></i>
+                            <p>Нет кабинетов</p>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Модальное окно -->
+<div class="modal fade" id="classroomModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="classroomModalTitle">Добавить кабинет</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="classroomForm">
+                <div class="modal-body">
+                    <input type="hidden" id="classroomId">
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Номер <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="classroomNumber" required placeholder="101">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Название</label>
+                            <input type="text" class="form-control" id="classroomName" placeholder="Актовый зал">
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Вместимость</label>
+                            <input type="number" class="form-control" id="classroomCapacity" value="30" min="1">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Этаж</label>
+                            <input type="number" class="form-control" id="classroomFloor" value="1" min="1">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Корпус</label>
+                            <input type="text" class="form-control" id="classroomBuilding" placeholder="БК">
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Оборудование</label>
+                        <textarea class="form-control" id="classroomEquipment" rows="2" placeholder="Проектор, компьютеры..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Сохранить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const classroomModal = new bootstrap.Modal(document.getElementById('classroomModal'));
+
+function openClassroomModal() {
+    document.getElementById('classroomForm').reset();
+    document.getElementById('classroomId').value = '';
+    document.getElementById('classroomModalTitle').textContent = 'Добавить кабинет';
+    document.getElementById('classroomCapacity').value = 30;
+    document.getElementById('classroomFloor').value = 1;
+}
+
+function editClassroom(id) {
+    fetch(`/api/classrooms/${id}`)
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('classroomId').value = data.id;
+            document.getElementById('classroomNumber').value = data.number;
+            document.getElementById('classroomName').value = data.name || '';
+            document.getElementById('classroomCapacity').value = data.capacity;
+            document.getElementById('classroomFloor').value = data.floor;
+            document.getElementById('classroomBuilding').value = data.building || '';
+            document.getElementById('classroomEquipment').value = data.equipment || '';
+            document.getElementById('classroomModalTitle').textContent = 'Редактировать кабинет';
+            classroomModal.show();
+        });
+}
+
+function deleteClassroom(id, number) {
+    if (confirm(`Удалить кабинет "${number}"?`)) {
+        fetch(`/api/classrooms/${id}`, { method: 'DELETE' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) location.reload();
+                else alert(data.error);
+            });
+    }
+}
+
+document.getElementById('classroomForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const id = document.getElementById('classroomId').value;
+    const method = id ? 'PUT' : 'POST';
+    const url = id ? `/api/classrooms/${id}` : '/api/classrooms';
+
+    fetch(url, {
+        method: method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            number: document.getElementById('classroomNumber').value,
+            name: document.getElementById('classroomName').value || null,
+            capacity: parseInt(document.getElementById('classroomCapacity').value),
+            floor: parseInt(document.getElementById('classroomFloor').value),
+            building: document.getElementById('classroomBuilding').value || null,
+            equipment: document.getElementById('classroomEquipment').value || null
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.id) location.reload();
+        else alert(data.error);
+    });
+});
+</script>
+{% endblock %}

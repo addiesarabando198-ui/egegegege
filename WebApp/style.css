@@ -1,0 +1,408 @@
+/* =========
+   Telegram Theme Variables & Fallbacks
+   ========= */
+:root {
+  --tg-theme-bg-color:           var(--tg-theme-bg-color, #ffffff);
+  --tg-theme-text-color:         var(--tg-theme-text-color, #000000);
+  --tg-theme-hint-color:         var(--tg-theme-hint-color, #999999);
+  --tg-theme-link-color:         var(--tg-theme-link-color, #2481cc);
+  --tg-theme-button-color:       var(--tg-theme-button-color, #5288c1);
+  --tg-theme-button-text-color:  var(--tg-theme-button-text-color, #ffffff);
+  --tg-theme-secondary-bg-color: var(--tg-theme-secondary-bg-color, #f4f4f4);
+  --tg-theme-destructive-text-color: var(--tg-theme-destructive-text-color, #cc0000);
+
+  /* --- RGB Fallbacks (Примерные! Настройте под ваши базовые цвета) --- */
+  --tg-theme-button-color-rgb:        82, 136, 193; /* для #5288c1 */
+  --tg-theme-destructive-text-color-rgb: 204, 0, 0; /* для #cc0000 */
+
+  /* Custom variables */
+  --border-radius-l: 12px;
+  --border-radius-m: 10px;
+  --border-radius-s: 8px;
+  --spacing-xs: 5px;   /* Чуть увеличим мелкие отступы */
+  --spacing-s: 10px;  /* Увеличим */
+  --spacing-m: 16px;  /* Увеличим */
+  --spacing-l: 22px;  /* Увеличим */
+  --spacing-xl: 28px; /* Увеличим */
+  --transition-fast: 0.15s ease-out;
+  --transition-medium: 0.2s ease-out;
+  /* Убрали тени из переменных, будем использовать border */
+}
+
+/* Dark mode fallback */
+@media (prefers-color-scheme: dark) {
+  :root:not([style*="--tg-theme-bg-color"]) {
+    --tg-theme-bg-color: #1a1b1e;
+    --tg-theme-text-color: #e9e9e9;
+    --tg-theme-hint-color: #8e8e93;
+    --tg-theme-link-color: #5e9ce6;
+    --tg-theme-button-color: #5e9ce6;
+    --tg-theme-button-text-color: #ffffff;
+    --tg-theme-secondary-bg-color: #2c2c2e;
+    --tg-theme-destructive-text-color: #ff453a;
+     /* --- RGB Fallbacks для темной темы (Примерные!) --- */
+    --tg-theme-button-color-rgb:        94, 156, 230; /* для #5e9ce6 */
+    --tg-theme-destructive-text-color-rgb: 255, 69, 58;  /* для #ff453a */
+  }
+}
+
+/* ========= Base Styles ========= */
+* { box-sizing: border-box; }
+html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  margin: 0;
+  padding: var(--spacing-m);
+  padding-bottom: 100px;
+  background: var(--tg-theme-bg-color);
+  color: var(--tg-theme-text-color);
+  overscroll-behavior: none;
+  line-height: 1.5;
+}
+.container { max-width: 640px; margin: 0 auto; }
+
+/* ========= Typography ========= */
+h1, h2, h3 { margin: 0; font-weight: 600; }
+h1.page-title { font-size: 1.9rem; text-align: center; margin-bottom: var(--spacing-xl); }
+h2.product-title {
+    font-size: 1.5rem;
+    text-align: center;
+    margin-bottom: var(--spacing-l);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-s);
+}
+h3.tariff-title {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin-bottom: var(--spacing-s); /* Явный отступ вниз */
+}
+p { margin: 0; }
+a { color: var(--tg-theme-link-color); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ========= Sections & Layout ========= */
+.product-section {
+  background: var(--tg-theme-secondary-bg-color);
+  border-radius: var(--border-radius-l);
+  padding: var(--spacing-l);
+  margin-bottom: var(--spacing-l);
+  /* Убрали тень секции для упрощения */
+}
+.email-section, .notes-section {
+  background: transparent;
+  padding: 0;
+  margin-bottom: var(--spacing-l);
+}
+/* Email секцию вернем в блок для визуального разделения */
+.email-section {
+    background: var(--tg-theme-secondary-bg-color);
+    border-radius: var(--border-radius-l);
+    padding: var(--spacing-l);
+    margin-top: var(--spacing-l); /* Добавим отступ сверху */
+}
+
+.tariff-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--spacing-l);
+}
+
+/* ========= Tariff Card (Telegram Optimized) ========= */
+.tariff-card {
+  /* --- Граница для визуального разделения --- */
+  border: 1px solid rgba(var(--tg-theme-hint-color-rgb, 153, 153, 153), 0.5); /* Полупрозрачная граница цвета подсказки */
+  border-radius: var(--border-radius-m);
+  padding: var(--spacing-l);
+  display: flex;
+  flex-direction: column;
+  text-align: center;
+  background: var(--tg-theme-bg-color);
+  /* Убрали тень */
+  transition: border-color var(--transition-medium), transform var(--transition-fast);
+  cursor: pointer;
+  /* Убрали gap, используем margin-bottom у элементов внутри */
+}
+
+.tariff-card:hover {
+   transform: translateY(-3px); /* Небольшой сдвиг вверх */
+   border-color: var(--tg-theme-button-color); /* Рамка в цвет кнопки при наведении */
+}
+
+/* --- Активное состояние через жирную рамку --- */
+.tariff-card.active {
+  border: 2px solid var(--tg-theme-button-color);
+  padding: calc(var(--spacing-l) - 1px); /* Компенсируем толщину рамки, чтобы размер не прыгал */
+  transform: translateY(0); /* Убираем сдвиг в активном состоянии */
+}
+
+.tariff-duration {
+    font-size: 0.9em;
+    color: var(--tg-theme-hint-color);
+    margin-bottom: var(--spacing-s); /* Явный отступ */
+}
+.tariff-price {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--tg-theme-text-color);
+  margin-top: var(--spacing-xs);
+  margin-bottom: var(--spacing-m); /* Явный отступ */
+  line-height: 1.2;
+}
+
+/* ========= Buy Button (Telegram Optimized) ========= */
+.buy-button {
+  margin-top: auto;
+  width: 100%;
+  padding: 12px 16px;
+  background: var(--tg-theme-button-color);
+  color: var(--tg-theme-button-text-color);
+  border: none;
+  border-radius: var(--border-radius-s);
+  font-weight: 600;
+  font-size: 1.05em;
+  cursor: pointer;
+  transition: filter var(--transition-fast), transform var(--transition-fast);
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Упрощенный hover, т.к. transform может глючить в webview */
+.buy-button:hover:not(:disabled) {
+  filter: brightness(110%);
+}
+@media (prefers-color-scheme: dark) {
+  .buy-button:hover:not(:disabled) { filter: brightness(120%); }
+}
+
+.buy-button:active:not(:disabled) {
+  transform: scale(0.98);
+  filter: brightness(95%);
+}
+
+.buy-button:disabled,
+.buy-button.disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: var(--tg-theme-secondary-bg-color);
+  color: var(--tg-theme-hint-color);
+  transform: none;
+  filter: none;
+}
+
+/* ========= Email Input & Error Message (Telegram Optimized) ========= */
+.email-label { display: block; margin-bottom: var(--spacing-s); font-weight: 600; }
+.email-input-wrapper {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: var(--spacing-s);
+}
+.email-input {
+  flex-grow: 1;
+  min-width: 200px;
+  padding: 12px 14px;
+  font-size: 1em;
+  /* --- Используем чуть более явную границу для инпута --- */
+  border: 1px solid var(--tg-theme-hint-color);
+  border-radius: var(--border-radius-s);
+  background: var(--tg-theme-bg-color);
+  color: var(--tg-theme-text-color);
+  transition: border-color var(--transition-medium), box-shadow var(--transition-medium);
+  height: 48px;
+}
+.email-input:focus {
+  outline: none;
+  border-color: var(--tg-theme-button-color);
+  /* --- Убрали box-shadow на фокусе, он может плохо рендериться --- */
+}
+.hint {
+  flex-basis: 100%;
+  color: var(--tg-theme-hint-color);
+  font-size: 0.85em;
+  line-height: 1.4;
+  margin-top: var(--spacing-xs);
+  padding-left: 2px;
+}
+@media (min-width: 480px) {
+    .email-input-wrapper { flex-wrap: nowrap; align-items: center; }
+    .hint { flex-basis: auto; margin-top: 0; padding-left: var(--spacing-s); }
+}
+
+#error-message {
+  margin-top: var(--spacing-m);
+  border: 1px solid var(--tg-theme-destructive-text-color);
+  /* --- Используем RGBA для фона ошибки --- */
+  background: rgba(var(--tg-theme-destructive-text-color-rgb, 204, 0, 0), 0.1);
+  color: var(--tg-theme-destructive-text-color);
+  padding: 10px 14px;
+  border-radius: var(--border-radius-s);
+  font-size: 0.95em;
+  font-weight: 500;
+  display: block;
+  text-align: center;
+}
+#error-message:empty { display: none; }
+
+/* ========= Notes & Footer ========= */
+.notes-section { margin-bottom: var(--spacing-xl); }
+.note { font-size: 0.9em; color: var(--tg-theme-hint-color); text-align: center; margin-bottom: var(--spacing-m); }
+.page-footer { text-align: center; font-size: 0.85em; color: var(--tg-theme-hint-color); margin-top: var(--spacing-xl); padding-bottom: var(--spacing-m); }
+.page-footer hr {
+  border: none;
+  /* --- Более надежный цвет для разделителя через RGBA --- */
+  border-top: 1px solid rgba(var(--tg-theme-hint-color-rgb, 153, 153, 153), 0.3);
+  margin: var(--spacing-l) 0;
+}
+.legal-section { margin-bottom: var(--spacing-m); }
+.legal-section summary { cursor: pointer; font-weight: 500; color: var(--tg-theme-text-color); margin-bottom: var(--spacing-s); outline: none; transition: color var(--transition-fast); }
+.legal-section summary:hover { color: var(--tg-theme-link-color); }
+.legal-section summary a { font-size: 0.9em; margin-left: var(--spacing-xs); }
+.legal-content { font-size: 0.85em; margin-top: var(--spacing-s); padding-left: var(--spacing-m); border-left: 3px solid var(--tg-theme-secondary-bg-color); color: var(--tg-theme-hint-color); text-align: left; line-height: 1.6; }
+.legal-content p { margin-bottom: 0.8em; }
+.legal-content b { color: var(--tg-theme-text-color); }
+.copyright { margin-top: var(--spacing-l); font-size: 0.8em; }
+
+/* Glossary Styles */
+.glossary-title {
+  font-size: 1.7rem;
+  text-align: center;
+  margin-bottom: var(--spacing-l);
+}
+.search-wrapper {
+  margin-bottom: var(--spacing-m);
+}
+.search-input::placeholder{
+  color: var(--tg-theme-hint-color);
+  opacity: .8;
+}
+.search-input {
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 1rem;
+  border: 1px solid var(--tg-theme-hint-color);
+  border-radius: var(--border-radius-s);
+}
+.glossary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  transition: opacity 0.3s ease;
+  gap: var(--spacing-l);
+}
+.term-card {
+  background: var(--tg-theme-bg-color);
+  border: 1px solid rgba(var(--tg-theme-hint-color-rgb), 0.3);
+  border-radius: var(--border-radius-m);
+  padding: var(--spacing-m);
+  transition: transform var(--transition-fast), border-color var(--transition-medium);
+}
+.term-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--tg-theme-button-color);
+}
+.term-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--spacing-s);
+}
+.term-title {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin: 0;
+}
+.fav-btn {
+  background: none;
+  border: none;
+  font-size: 1.2rem;
+  cursor: pointer;
+  color: var(--tg-theme-button-color);
+}
+.term-definition {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  color: var(--tg-theme-text-color);
+}
+.no-results {
+  text-align: center;
+  color: var(--tg-theme-hint-color);
+  font-style: italic;
+}
+.nav-link {
+  text-decoration: none;
+  color: var(--tg-theme-text-color);
+  padding: var(--spacing-s) var(--spacing-m);
+  border-radius: var(--border-radius-s);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.nav-link.active {
+  background: var(--tg-theme-button-color);
+  color: var(--tg-theme-button-text-color);
+}
+.nav-link:hover {
+  background: var(--tg-theme-secondary-bg-color);
+}
+/* ─── Flashcard session overlay ─────────────────────────── */
+.flashcard-session{
+  position:fixed;inset:0;display:grid;place-items:center;
+  background:rgba(0,0,0,.7);z-index:1000;padding:20px;
+}
+.flashcard-card{
+  position: relative;
+  width:90vw; max-width:360px; height:220px;
+  perspective: 800px;
+}
+.flashcard-face {
+  position: absolute; inset:0;
+  display:flex; align-items:center; justify-content:center;
+  backface-visibility: hidden;
+  border-radius:16px; padding:24px;
+  background: var(--tg-theme-bg-color);
+  box-shadow:0 4px 16px rgba(0,0,0,0.35);
+  font-size:1.2rem; text-align:center; line-height:1.3;
+  transition: transform .4s ease;
+}
+.flashcard-face--front { transform: rotateY(0deg); }
+.flashcard-face--back  { transform: rotateY(180deg); }
+.flashcard-card.flipped { transform: rotateY(180deg); }
+.flashcard-progress {
+  width:90vw; max-width:360px; height:4px;
+  background: var(--tg-theme-secondary-bg-color);
+  border-radius: 2px; margin-bottom:12px;
+}
+.flashcard-progress__bar {
+  width: 0%; height:100%;
+  background: var(--tg-theme-button-color);
+  border-radius: 2px;
+  transition: width .3s ease;
+}
+
+.flashcard-card span{
+  display:block;
+  transform-style: preserve-3d;  /* нужны для 3-D-флипа */
+  backface-visibility: hidden;
+}
+.flashcard-card.flipped{transform:rotateY(180deg);}
+.flashcard-counter{
+  position:absolute;top:16px;right:24px;
+  color:var(--tg-theme-hint-color);font-size:.9rem;
+}
+.flashcard-buttons{
+  margin-top:18px;display:flex;gap:14px;flex-wrap:wrap;
+  justify-content:center;
+}
+.flashcard-buttons button{
+  flex:1 1 120px;padding:12px 16px;font-weight:600;
+  border:none;border-radius:10px;cursor:pointer;
+}
+.btn-known {background:var(--tg-theme-button-color); color:var(--tg-theme-button-text-color);}
+.btn-repeat{background:var(--tg-theme-secondary-bg-color);color:var(--tg-theme-text-color);}
+.btn-start-session{
+  padding:14px 18px;margin-top:20px;
+  font-size:1.05rem;font-weight:600;
+  border-radius:10px;border:none;cursor:pointer;
+  background:var(--tg-theme-button-color);
+  color:var(--tg-theme-button-text-color);
+}
+

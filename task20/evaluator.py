@@ -1,75 +1,58 @@
-"""AI-проверка для задания 20 через YandexGPT."""
+"""AI-проверка для задания 20."""
 
 import logging
 import os
 import json
-from enum import Enum
 from typing import Dict, List, Any, Optional
-from dataclasses import dataclass
+from core.types import (
+    UserID,
+    TaskType,
+    EvaluationResult,
+    CallbackData,
+    TaskRequirements,
+)
 
 logger = logging.getLogger(__name__)
+
+# Импорт калибровочных few-shot примеров
+try:
+    from core.fewshot_calibration import get_full_calibration_prompt
+except ImportError:
+    def get_full_calibration_prompt(task_number: int) -> str:
+        return ""
 
 # Безопасный импорт
 try:
     from core.ai_evaluator import (
         BaseAIEvaluator,
-        EvaluationResult,
-        TaskRequirements,
     )
-    from core.ai_service import YandexGPTService, YandexGPTConfig, YandexGPTModel
+    from core.ai_service import create_ai_service, AIServiceConfig, AIModel
     AI_EVALUATOR_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"AI evaluator components not available: {e}")
     AI_EVALUATOR_AVAILABLE = False
-    
+
     # Заглушки для работы без AI
-    @dataclass
-    class TaskRequirements:
-        task_number: int
-        task_name: str
-        max_score: int
-        criteria: List[Dict]
-        description: str
-    
-    @dataclass
-    class EvaluationResult:
-        scores: Dict[str, int]
-        total_score: int
-        max_score: int
-        feedback: str
-        detailed_analysis: Optional[Dict] = None
-        suggestions: Optional[List[str]] = None
-        factual_errors: Optional[List[str]] = None
-    
+
     class BaseAIEvaluator:
         def __init__(self, requirements: TaskRequirements):
             self.requirements = requirements
-    
-    class YandexGPTService:
-        pass
-    
-    class YandexGPTConfig:
-        pass
-    
-    class YandexGPTModel:
-        LITE = "yandexgpt-lite"
-        PRO = "yandexgpt"
 
+    def create_ai_service(config):
+        return None
 
-class StrictnessLevel(Enum):
-    """Уровни строгости проверки."""
-    LENIENT = "Мягкий"
-    STANDARD = "Стандартный" 
-    STRICT = "Строгий"
-    EXPERT = "Экспертный"
+    class AIServiceConfig:
+        pass
+
+    class AIModel:
+        LITE = "lite"
+        PRO = "pro"
 
 
 class Task20AIEvaluator(BaseAIEvaluator if AI_EVALUATOR_AVAILABLE else object):
-    """AI-проверщик для задания 20 с настраиваемой строгостью."""
-    
-    def __init__(self, strictness: StrictnessLevel = StrictnessLevel.STANDARD):
-        self.strictness = strictness
-        
+    """AI-проверщик для задания 20."""
+
+    def __init__(self):
         if AI_EVALUATOR_AVAILABLE:
             requirements = TaskRequirements(
                 task_number=20,
@@ -93,34 +76,22 @@ class Task20AIEvaluator(BaseAIEvaluator if AI_EVALUATOR_AVAILABLE else object):
                 criteria=[{"name": "К1", "max_score": 3, "description": "Корректность суждений"}],
                 description="Сформулируйте три суждения..."
             )
-        
+
         # Инициализируем сервис если доступен
         self.ai_service = None
         if AI_EVALUATOR_AVAILABLE:
             try:
-                config = YandexGPTConfig.from_env()
-                # Выбираем модель в зависимости от строгости
-                if strictness in [StrictnessLevel.STRICT, StrictnessLevel.EXPERT]:
-                    config.model = YandexGPTModel.PRO
-                else:
-                    config.model = YandexGPTModel.LITE
-                
-                # Настройка температуры
-                if strictness == StrictnessLevel.LENIENT:
-                    config.temperature = 0.4
-                elif strictness == StrictnessLevel.STANDARD:
-                    config.temperature = 0.3
-                else:
-                    config.temperature = 0.2
-                    
+                config = AIServiceConfig.from_env()
+                config.model = AIModel.LITE
+                config.temperature = 0.2
                 self.config = config
-                logger.info(f"Task20 AI evaluator configured with {strictness.value} strictness")
+                logger.info("Task20 AI evaluator configured")
             except Exception as e:
                 logger.error(f"Failed to configure AI service: {e}")
                 self.config = None
     
     def get_system_prompt(self) -> str:
-        """Системный промпт для YandexGPT."""
+        """Системный промпт для AI."""
         base_prompt = """Ты - опытный эксперт ЕГЭ по обществознанию, специализирующийся на проверке задания 20.
 
 ВАЖНЫЕ ПРАВИЛА ДЛЯ ЗАДАНИЯ 20:
@@ -155,7 +126,68 @@ class Task20AIEvaluator(BaseAIEvaluator if AI_EVALUATOR_AVAILABLE else object):
 - Общие рассуждения без чёткой аргументации
 - Суждения, не соответствующие типу (например, негативный вместо позитивного)
 
+ПРАВИЛО ДУБЛИРУЮЩИХ СУЖДЕНИЙ:
+Если два или более суждения по сути ДУБЛИРУЮТ или ДОПОЛНЯЮТ друг друга
+(раскрывают один и тот же аспект темы с разных сторон), они считаются
+как ОДИН элемент ответа, а не два.
+
+Алгоритм проверки на дубли:
+1. После оценки каждого суждения по отдельности, сравни ВСЕ пары суждений
+2. Если два суждения объясняют одно и то же явление — это дубль
+3. Если одно суждение является частным случаем другого — это дубль
+4. Засчитай дублирующие суждения как ОДНО
+
+Пример дубля:
+- «Налоги позволяют финансировать социальные программы» и
+  «Благодаря налогам государство обеспечивает выплату пенсий и пособий»
+→ Оба суждения об одном (финансирование социальной сферы) → считаются как 1 элемент
+
+Пример НЕ дубля:
+- «Налоги позволяют финансировать социальные программы» и
+  «Налоги выполняют регулирующую функцию, сдерживая потребление вредных товаров»
+→ Разные аспекты (финансирование vs регулирование) → 2 отдельных элемента
+
+В комментарии ОБЯЗАТЕЛЬНО укажи, если обнаружены дубли:
+"Суждения [N] и [M] дублируют друг друга (оба о [тема]) → засчитаны как 1 элемент"
+
+СВЯЗЬ С ТЕЗИСОМ — ОБЯЗАТЕЛЬНА!
+
+Суждение должно быть ЛОГИЧЕСКИ СВЯЗАНО с тезисом, который нужно объяснить/аргументировать.
+
+❌ НЕ засчитывается:
+"Налоги важны для государства"
+→ Это истинное суждение, но оно НЕ связано с конкретным тезисом задания
+
+✅ Засчитывается:
+"Чрезмерное перераспределение средств может снизить мотивацию к труду,
+поскольку работники видят, что значительная часть их дохода изымается"
+→ Суждение прямо связано с тезисом о рисках перераспределения
+
+ПРОВЕРЯЙ: Отвечает ли суждение на вопрос задания или это просто
+"правильная мысль на тему"?
+
+ПРИНЦИП ТОЛКОВАНИЯ В ПОЛЬЗУ УЧЕНИКА:
+В спорных и пограничных случаях, когда суждение можно трактовать и как верное,
+и как неверное — трактуй В ПОЛЬЗУ ученика.
+Снижай балл ТОЛЬКО при наличии явной, бесспорной ошибки.
+
+НЕЗНАКОМЫЕ КЛАССИФИКАЦИИ И ТЕОРИИ:
+Если ученик приводит классификацию, теорию или концепцию, которая тебе незнакома —
+НЕ отвергай её автоматически. Она может существовать в учебниках ФПУ или научной литературе.
+Снижай балл ТОЛЬКО если УВЕРЕН, что информация фактически ошибочна.
+
+""" + get_full_calibration_prompt(20) + """
+
 ВАЖНО: Будь строг в оценке, но справедлив. Учитывай российский контекст.
+
+ВЧИТЫВАЙСЯ В ЛОГИКУ РАССУЖДЕНИЙ:
+
+❌ НЕ проверяй по "ключевым фразам" или наличию терминов
+❌ НЕ останавливайся на середине рассуждения
+
+✅ Дочитывай каждое суждение до конца
+✅ Оценивай логическую цепочку: посылка → аргумент → вывод
+✅ Проверяй, есть ли причинно-следственная связь
 
 При проверке:
 - Будь лаконичен в комментариях
@@ -163,20 +195,10 @@ class Task20AIEvaluator(BaseAIEvaluator if AI_EVALUATOR_AVAILABLE else object):
 - Не используй общие фразы типа "нужно больше стараться"
 - Для каждого неудачного суждения предложи, как его переформулировать"""
 
-        # Модификация в зависимости от уровня строгости
-        if self.strictness == StrictnessLevel.LENIENT:
-            base_prompt += "\n\nУРОВЕНЬ: МЯГКИЙ - засчитывай суждения с небольшими недочётами."
-        elif self.strictness == StrictnessLevel.STANDARD:
-            base_prompt += "\n\nУРОВЕНЬ: СТАНДАРТНЫЙ - следуй критериям, но прощай мелкие недочёты."
-        elif self.strictness == StrictnessLevel.STRICT:
-            base_prompt += "\n\nУРОВЕНЬ: СТРОГИЙ - требуй полного соответствия критериям ФИПИ."
-        elif self.strictness == StrictnessLevel.EXPERT:
-            base_prompt += "\n\nУРОВЕНЬ: ЭКСПЕРТНЫЙ - максимальная строгость, как на реальном экзамене."
-        
         return base_prompt
     
     async def evaluate(self, answer: str, topic: str, **kwargs) -> EvaluationResult:
-        """Оценка ответа через YandexGPT."""
+        """Оценка ответа через AI."""
         task_text = kwargs.get('task_text', '')
         
         # Если AI недоступен, используем базовую оценку
@@ -248,8 +270,8 @@ class Task20AIEvaluator(BaseAIEvaluator if AI_EVALUATOR_AVAILABLE else object):
 ВАЖНО: Верни ТОЛЬКО валидный JSON в блоке кода, без дополнительного текста."""
 
         try:
-            # Используем сервис YandexGPT
-            async with YandexGPTService(self.config) as service:
+            # Используем сервис AI
+            async with create_ai_service(self.config) as service:
                 result = await service.get_json_completion(
                     prompt=evaluation_prompt,
                     system_prompt=self.get_system_prompt(),
@@ -259,7 +281,7 @@ class Task20AIEvaluator(BaseAIEvaluator if AI_EVALUATOR_AVAILABLE else object):
                 if result:
                     return self._parse_response(result, answer, topic)
                 else:
-                    logger.error("Failed to get JSON response from YandexGPT")
+                    logger.error("Failed to get JSON response from AI")
                     return self._basic_evaluation(answer, topic)
                     
         except Exception as e:
@@ -282,11 +304,11 @@ class Task20AIEvaluator(BaseAIEvaluator if AI_EVALUATOR_AVAILABLE else object):
             score = max(0, score - 1)
         
         return EvaluationResult(
-            scores={"К1": score},
+            criteria_scores={"К1": score},
             total_score=score,
             max_score=3,
             feedback=f"Обнаружено суждений: {len(arguments)}",
-            detailed_analysis={
+            detailed_feedback={  # Изменено: detailed_analysis -> detailed_feedback
                 "arguments_count": len(arguments),
                 "score": score,
                 "has_concrete_examples": has_concrete
@@ -300,7 +322,7 @@ class Task20AIEvaluator(BaseAIEvaluator if AI_EVALUATOR_AVAILABLE else object):
         )
     
     def _parse_response(self, response: Dict[str, Any], answer: str, topic: str) -> EvaluationResult:
-            """Парсинг ответа от YandexGPT."""
+            """Парсинг ответа от AI."""
             try:
                 score = response.get("score", 0)
                 
@@ -326,15 +348,15 @@ class Task20AIEvaluator(BaseAIEvaluator if AI_EVALUATOR_AVAILABLE else object):
                     feedback += f"\n⚠️ <b>Применён штраф:</b> {response.get('penalty_reason', '')}"
                 
                 return EvaluationResult(
-                    scores={"К1": score},
+                    criteria_scores={"К1": score},
                     total_score=score,
                     max_score=3,
                     feedback=feedback,
-                    detailed_analysis=response,
+                    detailed_feedback=response,  # Изменено: detailed_analysis -> detailed_feedback
                     suggestions=response.get("suggestions", []),
                     factual_errors=response.get("factual_errors", [])
                 )
                 
             except Exception as e:
-                logger.error(f"Error parsing YandexGPT response: {e}")
+                logger.error(f"Error parsing AI response: {e}")
                 return self._basic_evaluation(answer, topic)

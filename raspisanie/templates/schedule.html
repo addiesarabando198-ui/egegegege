@@ -1,0 +1,546 @@
+{% extends "base.html" %}
+
+{% block title %}Расписание{% endblock %}
+
+{% block head %}
+<style>
+    .schedule-grid {
+        display: grid;
+        grid-template-columns: 80px repeat(5, 1fr);
+        gap: 2px;
+        background: #dee2e6;
+    }
+    .schedule-header {
+        background: #0d6efd;
+        color: white;
+        padding: 10px;
+        text-align: center;
+        font-weight: bold;
+    }
+    .schedule-time {
+        background: #f8f9fa;
+        padding: 10px;
+        text-align: center;
+        font-size: 0.85em;
+    }
+    .schedule-cell {
+        background: white;
+        min-height: 80px;
+        padding: 5px;
+        position: relative;
+    }
+    .lesson-card {
+        border-radius: 4px;
+        padding: 5px 8px;
+        margin-bottom: 3px;
+        font-size: 0.8em;
+        cursor: move;
+        position: relative;
+        border-left: 3px solid;
+    }
+    .lesson-card:hover {
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+    .lesson-card .subject {
+        font-weight: bold;
+    }
+    .lesson-card .details {
+        font-size: 0.75em;
+        color: #666;
+    }
+    .lesson-card .btn-remove {
+        position: absolute;
+        top: 2px;
+        right: 2px;
+        font-size: 0.7em;
+        padding: 0 4px;
+        opacity: 0;
+    }
+    .lesson-card:hover .btn-remove {
+        opacity: 1;
+    }
+    .schedule-cell.drag-over {
+        background: #e3f2fd;
+    }
+    .conflict {
+        background: #ffebee !important;
+        border-color: #f44336 !important;
+    }
+    .empty-slot {
+        border: 2px dashed #dee2e6;
+        border-radius: 4px;
+        height: 70px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #adb5bd;
+        cursor: pointer;
+    }
+    .empty-slot:hover {
+        background: #f8f9fa;
+        border-color: #adb5bd;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1><i class="bi bi-table"></i> Расписание</h1>
+    <div class="btn-group">
+        <button class="btn btn-outline-primary" onclick="exportSchedule()">
+            <i class="bi bi-download"></i> Экспорт
+        </button>
+        <a href="{{ url_for('generate_page') }}" class="btn btn-success">
+            <i class="bi bi-magic"></i> Генерация
+        </a>
+    </div>
+</div>
+
+<!-- Выбор расписания и фильтры -->
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-md-3">
+                <label class="form-label">Версия расписания</label>
+                <select class="form-select" id="scheduleSelect" onchange="loadSchedule()">
+                    <option value="">— Выберите расписание —</option>
+                    {% for sch in schedules %}
+                    <option value="{{ sch.id }}" {% if sch.is_active %}selected{% endif %}>
+                        {{ sch.name }} {% if sch.is_active %}(активное){% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Режим просмотра</label>
+                <select class="form-select" id="viewMode" onchange="loadSchedule()">
+                    <option value="class">По классам</option>
+                    <option value="teacher">По учителям</option>
+                    <option value="classroom">По кабинетам</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" id="filterLabel">Класс</label>
+                <select class="form-select" id="filterSelect" onchange="loadSchedule()">
+                    {% for cls in classes %}
+                    <option value="{{ cls.id }}">{{ cls.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <button class="btn btn-outline-secondary w-100" onclick="toggleEditMode()">
+                    <i class="bi bi-pencil" id="editIcon"></i>
+                    <span id="editBtnText">Режим редактирования</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Сетка расписания -->
+<div class="card">
+    <div class="card-body p-0">
+        <div class="schedule-grid" id="scheduleGrid">
+            <!-- Заголовки -->
+            <div class="schedule-header"></div>
+            <div class="schedule-header">Понедельник</div>
+            <div class="schedule-header">Вторник</div>
+            <div class="schedule-header">Среда</div>
+            <div class="schedule-header">Четверг</div>
+            <div class="schedule-header">Пятница</div>
+
+            <!-- Уроки будут загружены через JS -->
+        </div>
+    </div>
+</div>
+
+<!-- Легенда конфликтов -->
+<div class="mt-3">
+    <small class="text-muted">
+        <span class="badge bg-danger">Красный</span> — конфликт (учитель/класс/кабинет уже заняты)
+    </small>
+</div>
+
+<!-- Модальное окно добавления урока -->
+<div class="modal fade" id="lessonModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="lessonModalTitle">Добавить урок</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="lessonForm">
+                <div class="modal-body">
+                    <input type="hidden" id="lessonId">
+                    <input type="hidden" id="lessonDay">
+                    <input type="hidden" id="lessonNumber">
+
+                    <div class="mb-3">
+                        <label class="form-label">Предмет <span class="text-danger">*</span></label>
+                        <select class="form-select" id="lessonSubject" required>
+                            <option value="">— Выберите предмет —</option>
+                            {% for subject in subjects %}
+                            <option value="{{ subject.id }}" data-color="{{ subject.color }}">{{ subject.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Учитель <span class="text-danger">*</span></label>
+                        <select class="form-select" id="lessonTeacher" required>
+                            <option value="">— Выберите учителя —</option>
+                            {% for teacher in teachers %}
+                            <option value="{{ teacher.id }}">{{ teacher.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Класс</label>
+                        <select class="form-select" id="lessonClass">
+                            <option value="">— Не выбран —</option>
+                            {% for cls in classes %}
+                            <option value="{{ cls.id }}">{{ cls.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Кабинет</label>
+                        <select class="form-select" id="lessonClassroom">
+                            <option value="">— Не выбран —</option>
+                            {% for room in classrooms %}
+                            <option value="{{ room.id }}">{{ room.number }}{% if room.name %} ({{ room.name }}){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="lessonIsEge">
+                        <label class="form-check-label" for="lessonIsEge">
+                            Практикум ЕГЭ
+                        </label>
+                    </div>
+
+                    <div class="mb-3" id="groupNameBlock" style="display: none;">
+                        <label class="form-label">Название группы</label>
+                        <input type="text" class="form-control" id="lessonGroupName" placeholder="Группа по физике">
+                    </div>
+
+                    <!-- Предупреждение о конфликтах -->
+                    <div class="alert alert-warning d-none" id="conflictWarning">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        <span id="conflictText"></span>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Сохранить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const lessonModal = new bootstrap.Modal(document.getElementById('lessonModal'));
+const DAYS = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница'];
+const TIMES = [
+    { num: 1, time: '8:30-9:15' },
+    { num: 2, time: '9:25-10:10' },
+    { num: 3, time: '10:25-11:10' },
+    { num: 4, time: '11:25-12:10' },
+    { num: 5, time: '12:20-13:05' },
+    { num: 6, time: '13:20-14:05' },
+    { num: 7, time: '14:15-15:00' }
+];
+
+let editMode = false;
+let currentScheduleId = null;
+let lessonsData = [];
+
+// Инициализация
+document.addEventListener('DOMContentLoaded', function() {
+    updateFilterOptions();
+    loadSchedule();
+
+    document.getElementById('lessonIsEge').addEventListener('change', function() {
+        document.getElementById('groupNameBlock').style.display = this.checked ? 'block' : 'none';
+    });
+});
+
+function updateFilterOptions() {
+    const viewMode = document.getElementById('viewMode').value;
+    const filterSelect = document.getElementById('filterSelect');
+    const filterLabel = document.getElementById('filterLabel');
+
+    filterSelect.innerHTML = '';
+
+    if (viewMode === 'class') {
+        filterLabel.textContent = 'Класс';
+        {% for cls in classes %}
+        filterSelect.innerHTML += `<option value="{{ cls.id }}">{{ cls.name }}</option>`;
+        {% endfor %}
+    } else if (viewMode === 'teacher') {
+        filterLabel.textContent = 'Учитель';
+        {% for teacher in teachers %}
+        filterSelect.innerHTML += `<option value="{{ teacher.id }}">{{ teacher.name }}</option>`;
+        {% endfor %}
+    } else {
+        filterLabel.textContent = 'Кабинет';
+        {% for room in classrooms %}
+        filterSelect.innerHTML += `<option value="{{ room.id }}">{{ room.number }}</option>`;
+        {% endfor %}
+    }
+}
+
+document.getElementById('viewMode').addEventListener('change', function() {
+    updateFilterOptions();
+    loadSchedule();
+});
+
+function loadSchedule() {
+    const scheduleId = document.getElementById('scheduleSelect').value;
+    if (!scheduleId) {
+        renderEmptyGrid();
+        return;
+    }
+
+    currentScheduleId = scheduleId;
+    const viewMode = document.getElementById('viewMode').value;
+    const filterId = document.getElementById('filterSelect').value;
+
+    fetch(`/api/schedules/${scheduleId}/lessons?view=${viewMode}&filter_id=${filterId}`)
+        .then(r => r.json())
+        .then(data => {
+            lessonsData = data;
+            renderSchedule();
+        });
+}
+
+function renderEmptyGrid() {
+    const grid = document.getElementById('scheduleGrid');
+    grid.innerHTML = `
+        <div class="schedule-header"></div>
+        <div class="schedule-header">Понедельник</div>
+        <div class="schedule-header">Вторник</div>
+        <div class="schedule-header">Среда</div>
+        <div class="schedule-header">Четверг</div>
+        <div class="schedule-header">Пятница</div>
+    `;
+
+    TIMES.forEach(t => {
+        grid.innerHTML += `<div class="schedule-time">${t.num}<br><small>${t.time}</small></div>`;
+        for (let d = 0; d < 5; d++) {
+            grid.innerHTML += `<div class="schedule-cell" data-day="${d}" data-lesson="${t.num}">
+                <div class="empty-slot">+</div>
+            </div>`;
+        }
+    });
+}
+
+function renderSchedule() {
+    const grid = document.getElementById('scheduleGrid');
+    grid.innerHTML = `
+        <div class="schedule-header"></div>
+        <div class="schedule-header">Понедельник</div>
+        <div class="schedule-header">Вторник</div>
+        <div class="schedule-header">Среда</div>
+        <div class="schedule-header">Четверг</div>
+        <div class="schedule-header">Пятница</div>
+    `;
+
+    TIMES.forEach(t => {
+        grid.innerHTML += `<div class="schedule-time">${t.num}<br><small>${t.time}</small></div>`;
+        for (let d = 0; d < 5; d++) {
+            const cellLessons = lessonsData.filter(l => l.day === d && l.lesson_number === t.num);
+            let cellHtml = `<div class="schedule-cell" data-day="${d}" data-lesson="${t.num}">`;
+
+            if (cellLessons.length > 0) {
+                cellLessons.forEach(lesson => {
+                    const color = lesson.subject_color || '#6c757d';
+                    cellHtml += `
+                        <div class="lesson-card" draggable="${editMode}"
+                             data-id="${lesson.id}"
+                             style="background: ${color}20; border-color: ${color}">
+                            <div class="subject">${lesson.subject_short || lesson.subject_name}</div>
+                            <div class="details">
+                                ${lesson.teacher_name ? lesson.teacher_name.split(' ')[0] : ''}<br>
+                                ${lesson.classroom_number || ''} ${lesson.class_name || ''}
+                            </div>
+                            ${editMode ? `<button class="btn btn-sm btn-outline-danger btn-remove" onclick="deleteLesson(${lesson.id})">×</button>` : ''}
+                        </div>`;
+                });
+            }
+
+            if (editMode) {
+                cellHtml += `<div class="empty-slot" onclick="openAddLesson(${d}, ${t.num})">+</div>`;
+            }
+
+            cellHtml += '</div>';
+            grid.innerHTML += cellHtml;
+        }
+    });
+
+    if (editMode) {
+        initDragAndDrop();
+    }
+}
+
+function toggleEditMode() {
+    editMode = !editMode;
+    document.getElementById('editBtnText').textContent = editMode ? 'Выключить редактирование' : 'Режим редактирования';
+    document.getElementById('editIcon').className = editMode ? 'bi bi-check-lg' : 'bi bi-pencil';
+    renderSchedule();
+}
+
+function initDragAndDrop() {
+    const cards = document.querySelectorAll('.lesson-card[draggable="true"]');
+    const cells = document.querySelectorAll('.schedule-cell');
+
+    cards.forEach(card => {
+        card.addEventListener('dragstart', e => {
+            e.dataTransfer.setData('lessonId', card.dataset.id);
+            card.style.opacity = '0.5';
+        });
+        card.addEventListener('dragend', e => {
+            card.style.opacity = '1';
+        });
+    });
+
+    cells.forEach(cell => {
+        cell.addEventListener('dragover', e => {
+            e.preventDefault();
+            cell.classList.add('drag-over');
+        });
+        cell.addEventListener('dragleave', e => {
+            cell.classList.remove('drag-over');
+        });
+        cell.addEventListener('drop', e => {
+            e.preventDefault();
+            cell.classList.remove('drag-over');
+            const lessonId = e.dataTransfer.getData('lessonId');
+            const newDay = parseInt(cell.dataset.day);
+            const newLessonNum = parseInt(cell.dataset.lesson);
+            moveLesson(lessonId, newDay, newLessonNum);
+        });
+    });
+}
+
+function moveLesson(lessonId, newDay, newLessonNumber) {
+    fetch(`/api/lessons/${lessonId}/move`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ day: newDay, lesson_number: newLessonNumber })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            loadSchedule();
+            showToast('Урок перемещён', 'success');
+        } else {
+            showToast(data.error || 'Ошибка перемещения', 'danger');
+        }
+    });
+}
+
+function openAddLesson(day, lessonNumber) {
+    document.getElementById('lessonForm').reset();
+    document.getElementById('lessonId').value = '';
+    document.getElementById('lessonDay').value = day;
+    document.getElementById('lessonNumber').value = lessonNumber;
+    document.getElementById('lessonModalTitle').textContent = `Добавить урок (${DAYS[day]}, ${lessonNumber} урок)`;
+    document.getElementById('groupNameBlock').style.display = 'none';
+    document.getElementById('conflictWarning').classList.add('d-none');
+
+    // Предзаполняем класс если в режиме "по классам"
+    const viewMode = document.getElementById('viewMode').value;
+    if (viewMode === 'class') {
+        document.getElementById('lessonClass').value = document.getElementById('filterSelect').value;
+    }
+
+    lessonModal.show();
+}
+
+function deleteLesson(id) {
+    if (confirm('Удалить этот урок?')) {
+        fetch(`/api/lessons/${id}`, { method: 'DELETE' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    loadSchedule();
+                    showToast('Урок удалён', 'success');
+                } else {
+                    showToast(data.error, 'danger');
+                }
+            });
+    }
+}
+
+document.getElementById('lessonForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const id = document.getElementById('lessonId').value;
+    const method = id ? 'PUT' : 'POST';
+    const url = id ? `/api/lessons/${id}` : '/api/lessons';
+
+    const data = {
+        schedule_id: currentScheduleId,
+        subject_id: parseInt(document.getElementById('lessonSubject').value),
+        teacher_id: parseInt(document.getElementById('lessonTeacher').value),
+        class_id: document.getElementById('lessonClass').value ? parseInt(document.getElementById('lessonClass').value) : null,
+        classroom_id: document.getElementById('lessonClassroom').value ? parseInt(document.getElementById('lessonClassroom').value) : null,
+        day: parseInt(document.getElementById('lessonDay').value),
+        lesson_number: parseInt(document.getElementById('lessonNumber').value),
+        is_ege_practice: document.getElementById('lessonIsEge').checked,
+        group_name: document.getElementById('lessonGroupName').value || null
+    };
+
+    fetch(url, {
+        method: method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    })
+    .then(r => r.json())
+    .then(response => {
+        if (response.id) {
+            lessonModal.hide();
+            loadSchedule();
+            showToast('Урок сохранён', 'success');
+        } else if (response.conflicts) {
+            document.getElementById('conflictWarning').classList.remove('d-none');
+            document.getElementById('conflictText').textContent = response.conflicts.join('; ');
+        } else {
+            showToast(response.error || 'Ошибка сохранения', 'danger');
+        }
+    });
+});
+
+function exportSchedule() {
+    const scheduleId = document.getElementById('scheduleSelect').value;
+    if (!scheduleId) {
+        showToast('Выберите расписание', 'warning');
+        return;
+    }
+    window.open(`/api/schedules/${scheduleId}/export`, '_blank');
+}
+
+function showToast(message, type = 'info') {
+    const container = document.getElementById('toast-container');
+    const id = 'toast-' + Date.now();
+    container.innerHTML += `
+        <div id="${id}" class="toast align-items-center text-white bg-${type} border-0" role="alert">
+            <div class="d-flex">
+                <div class="toast-body">${message}</div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+            </div>
+        </div>
+    `;
+    const toastEl = document.getElementById(id);
+    const toast = new bootstrap.Toast(toastEl);
+    toast.show();
+    toastEl.addEventListener('hidden.bs.toast', () => toastEl.remove());
+}
+</script>
+{% endblock %}

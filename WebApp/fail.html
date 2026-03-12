@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Ошибка оплаты</title>
+  <style>
+    :root {
+      --tg-theme-bg-color: var(--tg-theme-bg-color, #ffffff);
+      --tg-theme-text-color: var(--tg-theme-text-color, #000000);
+      --tg-theme-destructive-text-color: var(--tg-theme-destructive-text-color, #cc0000);
+      --tg-theme-secondary-bg-color: var(--tg-theme-secondary-bg-color, #f4f4f4);
+      --fail-color: #f44336;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --tg-theme-bg-color: #1a1b1e;
+        --tg-theme-text-color: #e9e9e9;
+        --tg-theme-destructive-text-color: #ff453a;
+        --tg-theme-secondary-bg-color: #2c2c2e;
+      }
+    }
+    html, body { height: 100%; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background-color: var(--tg-theme-bg-color);
+      color: var(--tg-theme-text-color);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    .message {
+      max-width: 500px;
+      background: var(--tg-theme-secondary-bg-color);
+      border-radius: 12px;
+      padding: 30px 40px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+      border: 1px solid var(--fail-color);
+    }
+    .message h1 {
+      font-size: 1.8em;
+      color: var(--fail-color);
+      margin: 0 0 15px 0;
+      font-weight: 600;
+    }
+    .message h1::before {
+      content: '❌';
+      margin-right: 10px;
+      font-size: 1.1em;
+      vertical-align: middle;
+    }
+    .message p {
+      font-size: 1.1em;
+      line-height: 1.6;
+      margin-bottom: 20px;
+    }
+    .close-btn {
+      display: inline-block;
+      padding: 12px 24px;
+      background-color: var(--tg-theme-button-color);
+      color: white;
+      text-decoration: none;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      font-size: 1em;
+    }
+  </style>
+  <script>
+    // Автоматическое закрытие через 5 секунд
+    setTimeout(() => {
+      if (window.Telegram && window.Telegram.WebApp) {
+        window.Telegram.WebApp.close();
+      }
+    }, 5000);
+  </script>
+</head>
+<body>
+  <div class="message">
+    <h1>Оплата не удалась</h1>
+    <p>
+      К сожалению, произошла ошибка при обработке платежа.<br>
+      Попробуйте еще раз или обратитесь в поддержку.<br>
+      Деньги не были списаны.
+    </p>
+    <button class="close-btn" onclick="window.close()">Закрыть</button>
+  </div>
+</body>
+</html>

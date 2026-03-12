@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+
+{% block title %}Импорт данных{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1><i class="bi bi-upload"></i> Импорт данных</h1>
+</div>
+
+<div class="row">
+    <div class="col-lg-8">
+        <!-- Форма импорта -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-file-earmark-excel"></i> Импорт из Excel</h5>
+            </div>
+            <div class="card-body">
+                <form id="importForm" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label class="form-label">Тип импорта</label>
+                        <select class="form-select" id="importType" required>
+                            <option value="teachers">Учителя</option>
+                            <option value="classrooms">Кабинеты</option>
+                            <option value="classes">Классы</option>
+                            <option value="subjects">Предметы</option>
+                            <option value="workload">Нагрузка</option>
+                            <option value="students">Ученики</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Файл Excel (.xlsx, .xls)</label>
+                        <input type="file" class="form-control" id="importFile" accept=".xlsx,.xls" required>
+                    </div>
+
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="skipExisting" checked>
+                        <label class="form-check-label" for="skipExisting">
+                            Пропускать существующие записи
+                        </label>
+                    </div>
+
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="updateExisting">
+                        <label class="form-check-label" for="updateExisting">
+                            Обновлять существующие записи
+                        </label>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary" id="importBtn">
+                        <i class="bi bi-upload"></i> Импортировать
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Результат импорта -->
+        <div class="card d-none" id="resultCard">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-check-circle"></i> Результат импорта</h5>
+            </div>
+            <div class="card-body">
+                <div class="row text-center mb-4">
+                    <div class="col-md-4">
+                        <h3 class="text-success" id="resultAdded">0</h3>
+                        <small class="text-muted">Добавлено</small>
+                    </div>
+                    <div class="col-md-4">
+                        <h3 class="text-warning" id="resultSkipped">0</h3>
+                        <small class="text-muted">Пропущено</small>
+                    </div>
+                    <div class="col-md-4">
+                        <h3 class="text-danger" id="resultErrors">0</h3>
+                        <small class="text-muted">Ошибок</small>
+                    </div>
+                </div>
+
+                <div id="errorsList" class="d-none">
+                    <h6>Ошибки:</h6>
+                    <ul class="list-group" id="errorsListItems"></ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <!-- Шаблоны -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-file-earmark-arrow-down"></i> Шаблоны файлов</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted">Скачайте шаблоны для заполнения данных:</p>
+                <div class="d-grid gap-2">
+                    <a href="/api/templates/teachers" class="btn btn-outline-primary">
+                        <i class="bi bi-download"></i> Шаблон учителей
+                    </a>
+                    <a href="/api/templates/classrooms" class="btn btn-outline-primary">
+                        <i class="bi bi-download"></i> Шаблон кабинетов
+                    </a>
+                    <a href="/api/templates/classes" class="btn btn-outline-primary">
+                        <i class="bi bi-download"></i> Шаблон классов
+                    </a>
+                    <a href="/api/templates/workload" class="btn btn-outline-primary">
+                        <i class="bi bi-download"></i> Шаблон нагрузки
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Инструкция по формату -->
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-info-circle"></i> Формат данных</h5>
+            </div>
+            <div class="card-body">
+                <div class="accordion" id="formatAccordion">
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTeachers">
+                                Учителя
+                            </button>
+                        </h2>
+                        <div id="collapseTeachers" class="accordion-collapse collapse" data-bs-parent="#formatAccordion">
+                            <div class="accordion-body">
+                                <small>
+                                    <strong>Столбцы:</strong><br>
+                                    ФИО* | Сокращение | Email | Телефон | Кабинет | Предметы (через запятую)
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseClassrooms">
+                                Кабинеты
+                            </button>
+                        </h2>
+                        <div id="collapseClassrooms" class="accordion-collapse collapse" data-bs-parent="#formatAccordion">
+                            <div class="accordion-body">
+                                <small>
+                                    <strong>Столбцы:</strong><br>
+                                    Номер* | Название | Вместимость | Этаж | Корпус | Оборудование
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseClasses">
+                                Классы
+                            </button>
+                        </h2>
+                        <div id="collapseClasses" class="accordion-collapse collapse" data-bs-parent="#formatAccordion">
+                            <div class="accordion-body">
+                                <small>
+                                    <strong>Столбцы:</strong><br>
+                                    Название* (11-А) | Профиль | Учеников | Кабинет
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseWorkload">
+                                Нагрузка
+                            </button>
+                        </h2>
+                        <div id="collapseWorkload" class="accordion-collapse collapse" data-bs-parent="#formatAccordion">
+                            <div class="accordion-body">
+                                <small>
+                                    <strong>Столбцы:</strong><br>
+                                    Учитель* | Предмет* | Класс* | Часов в неделю | Группа (1/2)
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseStudents">
+                                Ученики
+                            </button>
+                        </h2>
+                        <div id="collapseStudents" class="accordion-collapse collapse" data-bs-parent="#formatAccordion">
+                            <div class="accordion-body">
+                                <small>
+                                    <strong>Столбцы:</strong><br>
+                                    ФИО* | Класс* | Предметы ЕГЭ (через запятую)
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <p class="text-muted mt-3 mb-0">
+                    <small>* — обязательное поле</small>
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('importForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+
+    const formData = new FormData();
+    formData.append('type', document.getElementById('importType').value);
+    formData.append('file', document.getElementById('importFile').files[0]);
+    formData.append('skip_existing', document.getElementById('skipExisting').checked);
+    formData.append('update_existing', document.getElementById('updateExisting').checked);
+
+    document.getElementById('importBtn').disabled = true;
+    document.getElementById('importBtn').innerHTML = '<span class="spinner-border spinner-border-sm"></span> Импорт...';
+
+    fetch('/api/import', {
+        method: 'POST',
+        body: formData
+    })
+    .then(r => r.json())
+    .then(result => {
+        document.getElementById('importBtn').disabled = false;
+        document.getElementById('importBtn').innerHTML = '<i class="bi bi-upload"></i> Импортировать';
+
+        document.getElementById('resultCard').classList.remove('d-none');
+        document.getElementById('resultAdded').textContent = result.added || 0;
+        document.getElementById('resultSkipped').textContent = result.skipped || 0;
+        document.getElementById('resultErrors').textContent = result.errors ? result.errors.length : 0;
+
+        if (result.errors && result.errors.length > 0) {
+            document.getElementById('errorsList').classList.remove('d-none');
+            const list = document.getElementById('errorsListItems');
+            list.innerHTML = '';
+            result.errors.forEach(err => {
+                list.innerHTML += `<li class="list-group-item list-group-item-danger">${err}</li>`;
+            });
+        } else {
+            document.getElementById('errorsList').classList.add('d-none');
+        }
+
+        if (result.error) {
+            alert('Ошибка: ' + result.error);
+        }
+    })
+    .catch(err => {
+        document.getElementById('importBtn').disabled = false;
+        document.getElementById('importBtn').innerHTML = '<i class="bi bi-upload"></i> Импортировать';
+        alert('Ошибка: ' + err.message);
+    });
+});
+</script>
+{% endblock %}

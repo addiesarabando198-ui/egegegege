@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+
+{% block title %}Учителя{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1><i class="bi bi-people"></i> Учителя</h1>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#teacherModal" onclick="openTeacherModal()">
+        <i class="bi bi-plus-lg"></i> Добавить учителя
+    </button>
+</div>
+
+<!-- Таблица учителей -->
+<div class="card">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover" id="teachersTable">
+                <thead>
+                    <tr>
+                        <th>ФИО</th>
+                        <th>Предметы</th>
+                        <th>Кабинет</th>
+                        <th>Недоступен</th>
+                        <th width="120">Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for teacher in teachers %}
+                    <tr data-id="{{ teacher.id }}">
+                        <td>
+                            <strong>{{ teacher.name }}</strong>
+                            {% if teacher.short_name %}
+                                <br><small class="text-muted">{{ teacher.short_name }}</small>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% for subject in teacher.subjects[:3] %}
+                                <span class="badge bg-secondary">{{ subject.short_name or subject.name }}</span>
+                            {% endfor %}
+                            {% if teacher.subjects|length > 3 %}
+                                <span class="badge bg-light text-dark">+{{ teacher.subjects|length - 3 }}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if teacher.home_classroom %}
+                                {{ teacher.home_classroom.number }}
+                            {% else %}
+                                <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% set days = teacher.get_unavailable_days() %}
+                            {% if days %}
+                                {% for d in days %}
+                                    <span class="badge bg-warning text-dark">{{ day_names[d][:2] }}</span>
+                                {% endfor %}
+                            {% else %}
+                                <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary" onclick="editTeacher({{ teacher.id }})" title="Редактировать">
+                                <i class="bi bi-pencil"></i>
+                            </button>
+                            <button class="btn btn-sm btn-outline-danger" onclick="deleteTeacher({{ teacher.id }}, '{{ teacher.name }}')" title="Удалить">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="text-center text-muted py-4">
+                            <i class="bi bi-inbox fs-1"></i>
+                            <p>Нет учителей. Добавьте первого!</p>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Модальное окно добавления/редактирования -->
+<div class="modal fade" id="teacherModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="teacherModalTitle">Добавить учителя</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="teacherForm">
+                <div class="modal-body">
+                    <input type="hidden" id="teacherId">
+
+                    <div class="row">
+                        <div class="col-md-8 mb-3">
+                            <label class="form-label">ФИО <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="teacherName" required placeholder="Иванова Мария Петровна">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Сокращение</label>
+                            <input type="text" class="form-control" id="teacherShortName" placeholder="Иванова М.П.">
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Email</label>
+                            <input type="email" class="form-control" id="teacherEmail" placeholder="ivanova@school.ru">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Телефон</label>
+                            <input type="tel" class="form-control" id="teacherPhone" placeholder="+7 999 123-45-67">
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Домашний кабинет</label>
+                        <select class="form-select" id="teacherClassroom">
+                            <option value="">— Не выбран —</option>
+                            {% for room in classrooms %}
+                                <option value="{{ room.id }}">{{ room.number }} {% if room.name %}({{ room.name }}){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Предметы</label>
+                        <div class="row">
+                            {% for subject in subjects %}
+                            <div class="col-md-4 col-6">
+                                <div class="form-check">
+                                    <input class="form-check-input teacher-subject" type="checkbox" value="{{ subject.id }}" id="subject{{ subject.id }}">
+                                    <label class="form-check-label" for="subject{{ subject.id }}">
+                                        {{ subject.name }}
+                                    </label>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Недоступные дни</label>
+                        <div class="d-flex gap-3">
+                            {% for day in day_names %}
+                            <div class="form-check">
+                                <input class="form-check-input teacher-day" type="checkbox" value="{{ loop.index0 }}" id="day{{ loop.index0 }}">
+                                <label class="form-check-label" for="day{{ loop.index0 }}">{{ day[:2] }}</label>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        <small class="text-muted">Отметьте дни, когда учитель не работает</small>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Сохранить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const teacherModal = new bootstrap.Modal(document.getElementById('teacherModal'));
+
+function openTeacherModal(id = null) {
+    document.getElementById('teacherForm').reset();
+    document.getElementById('teacherId').value = '';
+    document.getElementById('teacherModalTitle').textContent = 'Добавить учителя';
+
+    // Сбрасываем чекбоксы
+    document.querySelectorAll('.teacher-subject').forEach(cb => cb.checked = false);
+    document.querySelectorAll('.teacher-day').forEach(cb => cb.checked = false);
+}
+
+function editTeacher(id) {
+    fetch(`/api/teachers/${id}`)
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('teacherId').value = data.id;
+            document.getElementById('teacherName').value = data.name;
+            document.getElementById('teacherShortName').value = data.short_name || '';
+            document.getElementById('teacherEmail').value = data.email || '';
+            document.getElementById('teacherPhone').value = data.phone || '';
+            document.getElementById('teacherClassroom').value = data.home_classroom_id || '';
+
+            // Предметы
+            document.querySelectorAll('.teacher-subject').forEach(cb => {
+                cb.checked = data.subjects.includes(
+                    cb.parentElement.querySelector('label').textContent.trim()
+                );
+            });
+
+            // Дни
+            document.querySelectorAll('.teacher-day').forEach(cb => {
+                cb.checked = data.unavailable_days.includes(parseInt(cb.value));
+            });
+
+            document.getElementById('teacherModalTitle').textContent = 'Редактировать учителя';
+            teacherModal.show();
+        });
+}
+
+function deleteTeacher(id, name) {
+    if (confirm(`Удалить учителя "${name}"?`)) {
+        fetch(`/api/teachers/${id}`, { method: 'DELETE' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    location.reload();
+                } else {
+                    alert(data.error || 'Ошибка удаления');
+                }
+            });
+    }
+}
+
+document.getElementById('teacherForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+
+    const id = document.getElementById('teacherId').value;
+    const method = id ? 'PUT' : 'POST';
+    const url = id ? `/api/teachers/${id}` : '/api/teachers';
+
+    const subjectIds = [];
+    document.querySelectorAll('.teacher-subject:checked').forEach(cb => {
+        subjectIds.push(parseInt(cb.value));
+    });
+
+    const unavailableDays = [];
+    document.querySelectorAll('.teacher-day:checked').forEach(cb => {
+        unavailableDays.push(parseInt(cb.value));
+    });
+
+    const data = {
+        name: document.getElementById('teacherName').value,
+        short_name: document.getElementById('teacherShortName').value || null,
+        email: document.getElementById('teacherEmail').value || null,
+        phone: document.getElementById('teacherPhone').value || null,
+        home_classroom_id: document.getElementById('teacherClassroom').value || null,
+        subject_ids: subjectIds,
+        unavailable_days: unavailableDays
+    };
+
+    fetch(url, {
+        method: method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.id) {
+            location.reload();
+        } else {
+            alert(data.error || 'Ошибка сохранения');
+        }
+    });
+});
+</script>
+{% endblock %}

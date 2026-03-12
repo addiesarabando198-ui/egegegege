@@ -1,0 +1,20 @@
+[Unit]
+Description=Teacher WebApp API
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/ege-bot
+Environment="PATH=/usr/bin:/usr/local/bin"
+ExecStart=/usr/bin/python3 -m uvicorn api.app:app --host 127.0.0.1 --port 8000 --workers 4
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=teacher-api
+
+[Install]
+WantedBy=multi-user.target

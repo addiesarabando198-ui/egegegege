@@ -10,6 +10,7 @@ class TopicSelector:
         self.topics = topics
         self.topics_by_block = self._group_by_block(topics)
         self.topic_ids = {t['id'] for t in topics}
+        self.topics_by_id = {t['id']: t for t in topics}
     
     def _group_by_block(self, topics: List[Dict]) -> Dict[str, List[Dict]]:
         """Группировка тем по блокам."""

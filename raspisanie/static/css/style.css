@@ -1,0 +1,336 @@
+/*
+ * Стили для системы расписания
+ * ГБОУ "Школа Покровский квартал"
+ */
+
+/* Общие стили */
+body {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+main {
+    flex: 1;
+}
+
+/* Навигация */
+.navbar-brand {
+    font-weight: bold;
+}
+
+.navbar .nav-link {
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    margin: 0 2px;
+}
+
+.navbar .nav-link:hover {
+    background: rgba(255,255,255,0.1);
+}
+
+.navbar .nav-link.active {
+    background: rgba(255,255,255,0.2);
+}
+
+/* Карточки */
+.card {
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    border: none;
+}
+
+.card-header {
+    background: #f8f9fa;
+    border-bottom: 1px solid #dee2e6;
+}
+
+/* Таблицы */
+.table th {
+    font-weight: 600;
+    background: #f8f9fa;
+    border-bottom: 2px solid #dee2e6;
+}
+
+.table td {
+    vertical-align: middle;
+}
+
+/* Кнопки */
+.btn {
+    border-radius: 6px;
+}
+
+.btn-group-sm .btn {
+    padding: 0.25rem 0.5rem;
+}
+
+/* Модальные окна */
+.modal-header {
+    background: #f8f9fa;
+}
+
+/* Формы */
+.form-label {
+    font-weight: 500;
+    margin-bottom: 0.25rem;
+}
+
+.form-control:focus,
+.form-select:focus {
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.25);
+}
+
+/* Бейджи */
+.badge {
+    font-weight: 500;
+}
+
+/* Сетка расписания */
+.schedule-grid {
+    display: grid;
+    grid-template-columns: 80px repeat(5, 1fr);
+    gap: 2px;
+    background: #dee2e6;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.schedule-header {
+    background: #0d6efd;
+    color: white;
+    padding: 12px 8px;
+    text-align: center;
+    font-weight: 600;
+    font-size: 0.9em;
+}
+
+.schedule-time {
+    background: #f8f9fa;
+    padding: 8px;
+    text-align: center;
+    font-weight: 500;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.schedule-time small {
+    font-size: 0.7em;
+    color: #6c757d;
+}
+
+.schedule-cell {
+    background: white;
+    min-height: 85px;
+    padding: 4px;
+    position: relative;
+    transition: background 0.2s;
+}
+
+.schedule-cell.drag-over {
+    background: #e3f2fd;
+}
+
+/* Карточки уроков */
+.lesson-card {
+    border-radius: 6px;
+    padding: 6px 8px;
+    margin-bottom: 4px;
+    font-size: 0.8em;
+    cursor: default;
+    position: relative;
+    border-left: 4px solid;
+    background: #f8f9fa;
+    transition: all 0.2s;
+}
+
+.lesson-card[draggable="true"] {
+    cursor: move;
+}
+
+.lesson-card:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    transform: translateY(-1px);
+}
+
+.lesson-card .subject {
+    font-weight: 600;
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.lesson-card .details {
+    font-size: 0.75em;
+    color: #666;
+    line-height: 1.3;
+}
+
+.lesson-card .btn-remove {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    font-size: 0.7em;
+    padding: 0 5px;
+    opacity: 0;
+    transition: opacity 0.2s;
+    border-radius: 50%;
+    line-height: 1.5;
+}
+
+.lesson-card:hover .btn-remove {
+    opacity: 1;
+}
+
+/* Пустые слоты */
+.empty-slot {
+    border: 2px dashed #dee2e6;
+    border-radius: 6px;
+    height: 65px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #adb5bd;
+    cursor: pointer;
+    font-size: 1.5em;
+    transition: all 0.2s;
+}
+
+.empty-slot:hover {
+    background: #f8f9fa;
+    border-color: #0d6efd;
+    color: #0d6efd;
+}
+
+/* Конфликты */
+.lesson-card.conflict {
+    background: #ffebee !important;
+    border-color: #f44336 !important;
+}
+
+.lesson-card.conflict::after {
+    content: '⚠';
+    position: absolute;
+    top: 2px;
+    left: 8px;
+    font-size: 0.8em;
+}
+
+/* Статистика на главной */
+.card.border-primary { border-left: 4px solid #0d6efd !important; }
+.card.border-success { border-left: 4px solid #198754 !important; }
+.card.border-info { border-left: 4px solid #0dcaf0 !important; }
+.card.border-warning { border-left: 4px solid #ffc107 !important; }
+.card.border-danger { border-left: 4px solid #dc3545 !important; }
+.card.border-secondary { border-left: 4px solid #6c757d !important; }
+
+/* Анимация загрузки */
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.loading {
+    animation: pulse 1.5s infinite;
+}
+
+/* Toast уведомления */
+#toast-container {
+    z-index: 1100;
+}
+
+/* Прогресс-бар */
+.progress {
+    background: #e9ecef;
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.progress-bar {
+    transition: width 0.3s ease;
+}
+
+/* Фильтры */
+.filters-row .form-select,
+.filters-row .form-control {
+    border-radius: 6px;
+}
+
+/* Адаптивность */
+@media (max-width: 768px) {
+    .schedule-grid {
+        grid-template-columns: 60px repeat(5, 1fr);
+        font-size: 0.85em;
+    }
+
+    .schedule-header {
+        padding: 8px 4px;
+        font-size: 0.75em;
+    }
+
+    .schedule-time {
+        padding: 4px;
+        font-size: 0.8em;
+    }
+
+    .lesson-card {
+        padding: 4px 6px;
+        font-size: 0.75em;
+    }
+
+    .schedule-cell {
+        min-height: 70px;
+        padding: 2px;
+    }
+
+    .empty-slot {
+        height: 55px;
+    }
+
+    .navbar-brand span {
+        display: none;
+    }
+}
+
+@media (max-width: 576px) {
+    .schedule-grid {
+        grid-template-columns: 50px repeat(5, 1fr);
+    }
+
+    .schedule-header {
+        font-size: 0.65em;
+        padding: 6px 2px;
+    }
+
+    .lesson-card .details {
+        display: none;
+    }
+}
+
+/* Печать */
+@media print {
+    .navbar,
+    .btn,
+    footer,
+    #toast-container {
+        display: none !important;
+    }
+
+    .card {
+        box-shadow: none;
+        border: 1px solid #dee2e6;
+    }
+
+    .schedule-grid {
+        border: 1px solid #000;
+    }
+
+    .lesson-card .btn-remove {
+        display: none;
+    }
+
+    .empty-slot {
+        border-color: #ccc;
+    }
+}

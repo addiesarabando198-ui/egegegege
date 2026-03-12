@@ -190,16 +190,26 @@ class DocumentProcessor:
     @classmethod
     def _clean_text(cls, text: str) -> str:
         """Очищает и нормализует текст."""
-        # Удаляем множественные пробелы и переносы строк
-        text = re.sub(r'\s+', ' ', text)
+        # Удаляем множественные пробелы внутри строк (но сохраняем переносы строк)
+        text = re.sub(r'[^\S\n]+', ' ', text)
+        # Удаляем множественные пустые строки (3+ → 2)
         text = re.sub(r'\n{3,}', '\n\n', text)
         
         # Удаляем специальные символы и невидимые символы
         text = re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]', '', text)
         
         # Нормализуем кавычки
-        text = text.replace('"', '"').replace('"', '"')
-        text = text.replace(''', "'").replace(''', "'")
+        quote_map = {
+            "“": '"',
+            "”": '"',
+            "„": '"',
+            "«": '"',
+            "»": '"',
+            "‘": "'",
+            "’": "'",
+            "‚": "'",
+        }
+        text = text.translate(str.maketrans(quote_map))
         
         return text.strip()
 
@@ -243,8 +253,8 @@ class DocumentHandlerMixin:
         # Удаляем сообщение о обработке
         try:
             await processing_msg.delete()
-        except:
-            pass
+        except Exception as e:
+            logger.error("Failed to delete processing message: %s", e)
         
         if not success:
             await update.message.reply_text(

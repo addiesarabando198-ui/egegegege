@@ -1,0 +1,124 @@
+/**
+ * Стили для форм
+ */
+
+/* ============================================
+   FORM GROUPS
+   ============================================ */
+.form-group {
+  margin-bottom: var(--spacing-lg);
+}
+
+.form-label {
+  display: block;
+  margin-bottom: var(--spacing-sm);
+  font-weight: 500;
+  font-size: 0.95rem;
+}
+
+.form-hint {
+  margin-top: var(--spacing-xs);
+  font-size: 0.85rem;
+  color: var(--tg-hint);
+}
+
+.form-error {
+  margin-top: var(--spacing-xs);
+  font-size: 0.85rem;
+  color: var(--color-error);
+  display: none;
+}
+
+.form-error.show {
+  display: block;
+}
+
+/* ============================================
+   INPUTS
+   ============================================ */
+.form-input,
+.form-textarea {
+  width: 100%;
+  padding: 12px 16px;
+  background: var(--tg-secondary-bg);
+  color: var(--tg-text);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font-size: 1rem;
+  transition: all var(--transition-fast);
+}
+
+.form-input:focus,
+.form-textarea:focus {
+  outline: none;
+  border-color: var(--tg-button);
+  box-shadow: 0 0 0 3px rgba(36, 129, 204, 0.1);
+}
+
+.form-input.error,
+.form-textarea.error {
+  border-color: var(--color-error);
+}
+
+.form-input.error:focus,
+.form-textarea.error:focus {
+  box-shadow: 0 0 0 3px rgba(244, 67, 54, 0.1);
+}
+
+.form-input::placeholder,
+.form-textarea::placeholder {
+  color: var(--tg-hint);
+}
+
+.form-textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+/* ============================================
+   CHECKBOXES & RADIOS
+   ============================================ */
+.checkbox-label,
+.radio-label {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  cursor: pointer;
+  user-select: none;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+}
+
+/* ============================================
+   DEADLINE OPTIONS
+   ============================================ */
+.deadline-options {
+  display: flex;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+  flex-wrap: wrap;
+}
+
+.deadline-quick-btn {
+  padding: 8px 16px;
+  background: var(--tg-secondary-bg);
+  color: var(--tg-text);
+  border-radius: var(--radius-md);
+  font-size: 0.9rem;
+  transition: all var(--transition-fast);
+}
+
+.deadline-quick-btn:hover {
+  background: var(--tg-button);
+  color: var(--tg-button-text);
+}
+
+.deadline-quick-btn.selected {
+  background: var(--tg-button);
+  color: var(--tg-button-text);
+}

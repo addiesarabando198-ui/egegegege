@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+
+{% block title %}Классы{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1><i class="bi bi-mortarboard"></i> Классы</h1>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#classModal" onclick="openClassModal()">
+        <i class="bi bi-plus-lg"></i> Добавить класс
+    </button>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>Класс</th>
+                        <th>Профиль</th>
+                        <th>Учеников</th>
+                        <th>Кабинет</th>
+                        <th width="120">Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for cls in classes %}
+                    <tr>
+                        <td><strong>{{ cls.name }}</strong></td>
+                        <td>{{ cls.profile or '—' }}</td>
+                        <td>{{ cls.student_count }}</td>
+                        <td>{{ cls.classroom.number if cls.classroom else '—' }}</td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary" onclick="editClass({{ cls.id }})">
+                                <i class="bi bi-pencil"></i>
+                            </button>
+                            <button class="btn btn-sm btn-outline-danger" onclick="deleteClass({{ cls.id }}, '{{ cls.name }}')">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="text-center text-muted py-4">
+                            <i class="bi bi-inbox fs-1"></i>
+                            <p>Нет классов</p>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Модальное окно -->
+<div class="modal fade" id="classModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="classModalTitle">Добавить класс</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="classForm">
+                <div class="modal-body">
+                    <input type="hidden" id="classId">
+
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Параллель <span class="text-danger">*</span></label>
+                            <select class="form-select" id="classGrade" required>
+                                <option value="11">11</option>
+                                <option value="10">10</option>
+                                <option value="9">9</option>
+                                <option value="8">8</option>
+                                <option value="7">7</option>
+                                <option value="6">6</option>
+                                <option value="5">5</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Буква <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="classLetter" required placeholder="А" maxlength="5">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Учеников</label>
+                            <input type="number" class="form-control" id="classStudentCount" value="25" min="0">
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Профиль</label>
+                        <input type="text" class="form-control" id="classProfile" placeholder="Технологический">
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Домашний кабинет</label>
+                        <select class="form-select" id="classClassroom">
+                            <option value="">— Не выбран —</option>
+                            {% for room in classrooms %}
+                            <option value="{{ room.id }}">{{ room.number }}{% if room.name %} ({{ room.name }}){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Сохранить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const classModal = new bootstrap.Modal(document.getElementById('classModal'));
+
+function openClassModal() {
+    document.getElementById('classForm').reset();
+    document.getElementById('classId').value = '';
+    document.getElementById('classModalTitle').textContent = 'Добавить класс';
+    document.getElementById('classGrade').value = '11';
+    document.getElementById('classStudentCount').value = 25;
+}
+
+function editClass(id) {
+    fetch(`/api/classes/${id}`)
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('classId').value = data.id;
+            document.getElementById('classGrade').value = data.grade;
+            document.getElementById('classLetter').value = data.letter;
+            document.getElementById('classProfile').value = data.profile || '';
+            document.getElementById('classStudentCount').value = data.student_count;
+            document.getElementById('classClassroom').value = data.classroom_id || '';
+            document.getElementById('classModalTitle').textContent = 'Редактировать класс';
+            classModal.show();
+        });
+}
+
+function deleteClass(id, name) {
+    if (confirm(`Удалить класс "${name}"?`)) {
+        fetch(`/api/classes/${id}`, { method: 'DELETE' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) location.reload();
+                else alert(data.error);
+            });
+    }
+}
+
+document.getElementById('classForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const id = document.getElementById('classId').value;
+    const method = id ? 'PUT' : 'POST';
+    const url = id ? `/api/classes/${id}` : '/api/classes';
+
+    const grade = document.getElementById('classGrade').value;
+    const letter = document.getElementById('classLetter').value;
+
+    fetch(url, {
+        method: method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            name: `${grade}-${letter}`,
+            grade: parseInt(grade),
+            letter: letter,
+            profile: document.getElementById('classProfile').value || null,
+            student_count: parseInt(document.getElementById('classStudentCount').value),
+            classroom_id: document.getElementById('classClassroom').value || null
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.id) location.reload();
+        else alert(data.error);
+    });
+});
+</script>
+{% endblock %}

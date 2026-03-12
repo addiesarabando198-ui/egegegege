@@ -173,3 +173,10 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 quiz_async.db
+users.db
+main_database.db
+data/ege_superbot.db
+node_modules/
+
+# Raspisanie generated files
+raspisanie/output/*.json

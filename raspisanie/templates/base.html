@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Расписание{% endblock %} - Покровский квартал</title>
+
+    <!-- Bootstrap 5 -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <!-- Custom CSS -->
+    <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <!-- Навигация -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary sticky-top">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="{{ url_for('index') }}">
+                <i class="bi bi-calendar3"></i> Расписание
+            </a>
+
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'teachers_list' %}active{% endif %}"
+                           href="{{ url_for('teachers_list') }}">
+                            <i class="bi bi-people"></i> Учителя
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'classrooms_list' %}active{% endif %}"
+                           href="{{ url_for('classrooms_list') }}">
+                            <i class="bi bi-door-open"></i> Кабинеты
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'classes_list' %}active{% endif %}"
+                           href="{{ url_for('classes_list') }}">
+                            <i class="bi bi-mortarboard"></i> Классы
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'subjects_list' %}active{% endif %}"
+                           href="{{ url_for('subjects_list') }}">
+                            <i class="bi bi-book"></i> Предметы
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'workload_list' %}active{% endif %}"
+                           href="{{ url_for('workload_list') }}">
+                            <i class="bi bi-list-check"></i> Нагрузка
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'schedule_view' %}active{% endif %}"
+                           href="{{ url_for('schedule_view') }}">
+                            <i class="bi bi-table"></i> Расписание
+                        </a>
+                    </li>
+                </ul>
+
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('import_page') }}">
+                            <i class="bi bi-upload"></i> Импорт
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link btn btn-success text-white ms-2" href="{{ url_for('generate_page') }}">
+                            <i class="bi bi-magic"></i> Генерация
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Уведомления -->
+    <div id="toast-container" class="position-fixed top-0 end-0 p-3" style="z-index: 1100"></div>
+
+    <!-- Основной контент -->
+    <main class="container-fluid py-4">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-light py-3 mt-auto">
+        <div class="container text-center text-muted">
+            <small>ГБОУ "Школа Покровский квартал" - Система составления расписания</small>
+        </div>
+    </footer>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- SortableJS для drag-and-drop -->
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    <!-- Custom JS -->
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

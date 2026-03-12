@@ -5,7 +5,7 @@ import csv
 from io import StringIO, BytesIO
 from datetime import datetime
 from typing import List, Tuple, Dict, Any, Optional, Set
-
+from .loader import QUESTIONS_DATA
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from telegram.error import BadRequest
@@ -20,7 +20,12 @@ except ImportError:
     logging.error("Не найден файл topic_data.py или словарь TOPIC_NAMES в нем.")
     TOPIC_NAMES = {}
 
-from .loader import QUESTIONS_DATA
+from .loader import QUESTIONS_DATA, QUESTIONS_DICT_FLAT
+
+try:
+    from .cache import questions_cache
+except ImportError:
+    questions_cache = None
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +62,20 @@ INCORRECT_PHRASES = [
     "❌ К сожалению, неверно!",
 ]
 
+# Мотивационные фразы для неправильных ответов
+MOTIVATIONAL_PHRASES = [
+    "Не расстраивайся, у тебя обязательно получится!",
+    "Попробуй еще раз, ты на верном пути!",
+    "Ошибки - это часть обучения!",
+    "С каждой попыткой ты становишься лучше!",
+    "Не сдавайся, успех уже близко!",
+    "Практика делает мастера!",
+    "Каждая ошибка приближает тебя к правильному ответу!",
+    "Ты можешь лучше, продолжай!",
+    "Главное - не останавливаться!",
+    "Удача улыбается настойчивым!",
+]
+
 # Специальные фразы для длинных стриков
 STREAK_MILESTONE_PHRASES = {
     5: "🔥 Горячая серия!",
@@ -76,6 +95,10 @@ def get_random_correct_phrase() -> str:
 def get_random_incorrect_phrase() -> str:
     """Возвращает случайную фразу для неправильного ответа."""
     return random.choice(INCORRECT_PHRASES)
+
+def get_random_motivational_phrase() -> str:
+    """Возвращает случайную мотивационную фразу."""
+    return random.choice(MOTIVATIONAL_PHRASES)
 
 def get_streak_milestone_phrase(streak: int) -> str:
     """Возвращает специальную фразу для достижения определенного стрика."""
@@ -153,65 +176,6 @@ def create_back_to_menu_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🏠 Главное меню", callback_data="to_main_menu")]
     ])
 
-async def check_subscription(user_id: int, bot, channel: str = None) -> bool:
-    """Проверка подписки на канал."""
-    # Временно отключаем проверку для тестирования
-    return True
-    
-    # Когда будете готовы включить проверку, раскомментируйте код ниже:
-    """
-    if not channel:
-        channel = REQUIRED_CHANNEL
-        
-    if not channel:
-        logger.warning("Канал для проверки подписки не указан")
-        return True
-    
-    try:
-        from telegram.constants import ChatMemberStatus
-        
-        member = await bot.get_chat_member(chat_id=channel, user_id=user_id)
-        
-        # Проверяем статус
-        if hasattr(member, 'status'):
-            return member.status in [
-                ChatMemberStatus.MEMBER,
-                ChatMemberStatus.ADMINISTRATOR,
-                ChatMemberStatus.OWNER,
-                ChatMemberStatus.CREATOR
-            ]
-        
-        # Старый способ для совместимости
-        status = getattr(member, 'status', None)
-        if status:
-            return status.lower() in ['member', 'administrator', 'creator', 'owner']
-            
-        return False
-        
-    except Exception as e:
-        logger.error(f"Ошибка проверки подписки: {e}")
-        return True  # В случае ошибки пропускаем
-    """
-
-async def send_subscription_required(update_or_query, channel: str):
-    """Отправка сообщения о необходимости подписки."""
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Подписаться", url=f"https://t.me/{channel.lstrip('@')}")],
-        [InlineKeyboardButton("🔄 Я подписался", callback_data="check_subscription")]
-    ])
-    
-    text = f"Для доступа к боту необходимо подписаться на канал {channel}"
-    
-    try:
-        if hasattr(update_or_query, 'message'):
-            # Это Update
-            await update_or_query.message.reply_text(text, reply_markup=kb)
-        else:
-            # Это CallbackQuery
-            await update_or_query.edit_message_text(text, reply_markup=kb)
-    except Exception as e:
-        logger.error(f"Error sending subscription required message: {e}")
-
 def normalize_answer(answer: str, question_type: str) -> str:
     """Нормализация ответа для сравнения."""
     if not answer:
@@ -232,6 +196,7 @@ def normalize_answer(answer: str, question_type: str) -> str:
 
 def format_question_text(question_data: dict) -> str:
     """Форматирование текста вопроса."""
+    
     if not question_data:
         return "❌ Ошибка: данные вопроса отсутствуют"
     
@@ -269,33 +234,35 @@ def format_question_text(question_data: dict) -> str:
         text += f"\n✍️ <i>Введите {len(col1_options)} цифр ответа без пробелов</i>"
     
     else:
+        # ИСПРАВЛЕНИЕ: Просто добавляем полный текст вопроса без разбивки
         question_text = question_data.get('question', '')
-        question_text = md_to_html(question_text)
-        parts = question_text.split('\n', 1)
-        instruction = parts[0]
-        options = parts[1] if len(parts) > 1 else ''
-        
-        text += f"❓ <b>{instruction}</b>\n\n"
-        
-        # Форматируем варианты ответов
-        if options:
-            lines = options.split('\n')
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    text += "\n"
-                    continue
-                    
-                # Проверяем, начинается ли строка с цифры и скобки/точки
-                if re.match(r'^\*?\*?\d+[).]', line):
-                    # Это вариант ответа
-                    # Конвертируем markdown в HTML
-                    line = md_to_html(line)
-                    # Добавляем отступ и форматирование
-                    text += f"  {line}\n"
-                else:
-                    # Это продолжение текста
-                    text += f"{line}\n"
+        if question_text:
+            # Конвертируем markdown в HTML для всего текста
+            question_text = md_to_html(question_text)
+            
+            # Добавляем красный вопросительный знак только в начале первой строки
+            lines = question_text.split('\n')
+            if lines:
+                # Первая строка - это инструкция/вопрос
+                first_line = lines[0].strip()
+                if first_line:
+                    text += f"❓ <b>{first_line}</b>\n\n"
+                
+                # Остальные строки - варианты ответов
+                if len(lines) > 1:
+                    for line in lines[1:]:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        # Проверяем, это вариант ответа или обычный текст
+                        if re.match(r'^\d+[).]', line):
+                            # Это вариант ответа - добавляем с отступом
+                            text += f"  {line}\n"
+                        else:
+                            # Обычный текст
+                            text += f"{line}\n"
+        else:
+            text += "❓ <b>Текст вопроса отсутствует</b>\n"
         
         # Подсказка по вводу
         text += "\n"
@@ -368,31 +335,42 @@ def format_progress_bar(current: int, total: int, width: int = 10) -> str:
     return f"[{bar}] {percentage}% ({current}/{total})"
 
 def find_question_by_id(question_id: str) -> Optional[Dict[str, Any]]:
-    """Ищет вопрос по ID используя кеш если доступен."""
+    """
+    Ищет вопрос по ID используя кеш если доступен.
+    
+    Args:
+        question_id: ID вопроса для поиска
+        
+    Returns:
+        Словарь с данными вопроса или None если не найден
+    """
     if not question_id:
         return None
     
-    # Используем кеш для быстрого поиска если он доступен
+    # Пробуем использовать кеш
     try:
-        from .cache import questions_cache
-        if questions_cache:
-            cached_question = questions_cache.get_by_id(question_id)
-            if cached_question:
-                return cached_question
+        if questions_cache and questions_cache._is_built:
+            question = questions_cache.get_by_id(question_id)
+            if question:
+                return question
     except ImportError:
         pass
     
-    # Если кеш не доступен или не построен, ищем по-старому
-    if not QUESTIONS_DATA:
-        return None
-        
-    for block_data in QUESTIONS_DATA.values():
-        for topic_questions in block_data.values():
-            for question in topic_questions:
-                if isinstance(question, dict) and question.get("id") == question_id:
-                    return question
+    # Fallback: поиск в QUESTIONS_DATA
+    if QUESTIONS_DATA:
+        for block_data in QUESTIONS_DATA.values():
+            for topic_questions in block_data.values():
+                for question in topic_questions:
+                    if question.get('id') == question_id:
+                        return question
     
-    logging.warning(f"Вопрос с ID {question_id} не найден.")
+    # Последняя попытка через loader
+    try:
+        if QUESTIONS_DICT_FLAT:
+            return QUESTIONS_DICT_FLAT.get(question_id)
+    except ImportError:
+        pass
+    
     return None
 
 async def export_user_stats_csv(user_id: int) -> str:
@@ -559,51 +537,68 @@ async def generate_detailed_report(user_id: int) -> str:
         logger.error(f"Error generating report for user {user_id}: {e}")
         raise
 
-async def purge_old_messages(context: ContextTypes.DEFAULT_TYPE, chat_id: int, keep_id: Optional[int] = None):
+async def purge_old_messages(context: ContextTypes.DEFAULT_TYPE, chat_id: int, keep_id: int = None):
     """
-    Удаляет все сохранённые сообщения из контекста.
-    
-    Args:
-        context: Контекст бота
-        chat_id: ID чата
-        keep_id: ID сообщения, которое НЕ нужно удалять (например, loading message)
+    Удаляет старые сообщения из чата, включая сообщения с изображениями.
     """
-    # Проверяем наличие bot instance
-    if not hasattr(context, 'bot') or not context.bot:
-        logger.warning("Bot instance not available for message deletion")
-        return
+    message_ids_to_delete = []
     
-    # Список всех ключей, содержащих ID сообщений
-    message_keys = [
-        'current_question_message_id',
-        'answer_message_id', 
-        'feedback_message_id'
-    ]
+    # Добавляем основное сообщение с вопросом
+    if 'current_question_message_id' in context.user_data:
+        msg_id = context.user_data['current_question_message_id']
+        if msg_id != keep_id:
+            message_ids_to_delete.append(msg_id)
     
-    # Собираем все ID для удаления
-    messages_to_delete = []
+    # Добавляем сообщение с фото (если было отправлено отдельно)
+    if 'current_photo_message_id' in context.user_data:
+        photo_id = context.user_data['current_photo_message_id']
+        if photo_id != keep_id:
+            message_ids_to_delete.append(photo_id)
+        context.user_data.pop('current_photo_message_id', None)
     
-    for key in message_keys:
-        msg_id = context.user_data.get(key)
-        if msg_id and msg_id != keep_id:
-            messages_to_delete.append(msg_id)
+    # Добавляем сообщение пользователя с ответом
+    if 'user_answer_message_id' in context.user_data:
+        answer_id = context.user_data['user_answer_message_id']
+        if answer_id != keep_id:
+            message_ids_to_delete.append(answer_id)
+
+    # Добавляем сообщение с анимацией проверки
+    if 'checking_message_id' in context.user_data:
+        checking_id = context.user_data['checking_message_id']
+        if checking_id != keep_id:
+            message_ids_to_delete.append(checking_id)
+        context.user_data.pop('checking_message_id', None)
+
+    # ИСПРАВЛЕНИЕ: Добавляем обработку feedback_message_id
+    if 'feedback_message_id' in context.user_data:
+        feedback_id = context.user_data['feedback_message_id']
+        if feedback_id != keep_id:
+            message_ids_to_delete.append(feedback_id)
+        context.user_data.pop('feedback_message_id', None)
     
-    # Добавляем дополнительные сообщения (пояснения и т.д.)
-    extra_messages = context.user_data.get('extra_messages_to_delete', [])
-    messages_to_delete.extend([msg_id for msg_id in extra_messages if msg_id != keep_id])
+    # Также проверяем result_message_id для совместимости
+    if 'result_message_id' in context.user_data:
+        result_id = context.user_data['result_message_id']
+        if result_id != keep_id:
+            message_ids_to_delete.append(result_id)
+        context.user_data.pop('result_message_id', None)
     
-    # Удаляем сообщения
-    for msg_id in messages_to_delete:
+    # Добавляем дополнительные сообщения (например, пояснения)
+    if 'extra_messages_to_delete' in context.user_data:
+        for msg_id in context.user_data['extra_messages_to_delete']:
+            if msg_id != keep_id:
+                message_ids_to_delete.append(msg_id)
+        context.user_data['extra_messages_to_delete'] = []
+    
+    # Удаляем все сообщения
+    for msg_id in message_ids_to_delete:
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
             logger.debug(f"Deleted message {msg_id}")
         except Exception as e:
-            logger.warning(f"Failed to delete message {msg_id}: {e}")
+            logger.debug(f"Could not delete message {msg_id}: {e}")
     
-    # Очищаем контекст
-    for key in message_keys:
-        context.user_data.pop(key, None)
-    context.user_data['extra_messages_to_delete'] = []
+    logger.info(f"Purged {len(message_ids_to_delete)} messages from chat {chat_id}")
 
 def md_to_html(text: str) -> str:
     """
@@ -618,7 +613,6 @@ def md_to_html(text: str) -> str:
     if not text:
         return ""
     
-    import re
     
     # Заменяем **текст** на <b>текст</b>
     text = re.sub(r'\*\*([^*]+)\*\*', r'<b>\1</b>', text)
@@ -642,25 +636,47 @@ class TestPartCallbackData:
     """Стандартные callback_data для test_part плагина."""
     
     # Основные действия
-    TO_MAIN_MENU = "to_main_menu"
-    TO_MENU = "to_menu" 
-    CANCEL = "cancel"
+    TEST_TO_MAIN_MENU = "to_main_menu"
+    TEST_TO_MENU = "to_menu"
+    TEST_CANCEL = "cancel"
     
     # Навигация по режимам
-    MODE_RANDOM = "mode:random"
-    MODE_TOPIC = "mode:choose_topic"
-    MODE_EXAM_NUM = "mode:choose_exam_num"
+    TEST_MODE_RANDOM = "mode:random"
+    TEST_MODE_TOPIC = "mode:choose_topic"
+    TEST_MODE_EXAM_NUM = "mode:choose_exam_num"
     
     # Действия после ответа
-    NEXT_RANDOM = "next_random"
-    NEXT_TOPIC = "next_topic" 
-    CHANGE_TOPIC = "change_topic"
+    TEST_NEXT_RANDOM = "next_random"
+    TEST_NEXT_TOPIC = "next_topic"
+    TEST_CHANGE_TOPIC = "change_topic"
     
     # Работа с ошибками
-    SHOW_EXPLANATION = "show_explanation"
-    NEXT_MISTAKE = "next_mistake"
-    SKIP_MISTAKE = "skip_mistake"
-    EXIT_MISTAKES = "exit_mistakes"
+    TEST_SHOW_EXPLANATION = "show_explanation"
+    TEST_NEXT_MISTAKE = "next_mistake"
+    TEST_SKIP_MISTAKE = "skip_mistake"
+    TEST_EXIT_MISTAKES = "exit_mistakes"
+
+    # Режим экзамена
+    TEST_EXAM_MODE = "initial:exam_mode"
+    TEST_EXAM_SKIP = "exam_skip_question"
+    TEST_EXAM_ABORT = "exam_abort"
+    TEST_EXAM_ABORT_CONFIRM = "exam_abort_confirm"
+    TEST_EXAM_CONTINUE = "exam_continue"
+    TEST_EXAM_START_PARTIAL = "exam_start_partial"
+    TEST_EXAM_DETAILED = "exam_detailed_review"
+    
+    # Пропуск вопросов
+    TEST_SKIP_QUESTION = "skip_question"
+    TEST_SKIP_MISTAKE = "skip_mistake"
+
+    # Префиксы и дополнительные действия
+    TEST_NEXT_CONTINUE = "test_next_continue"
+    TEST_NEXT_SHOW_EXPLANATION = "test_next_show_explanation"
+    TEST_NEXT_CHANGE_TOPIC = "test_next_change_topic"
+    TEST_NEXT_CHANGE_BLOCK = "test_next_change_block"
+    TEST_MISTAKE_FINISH = "test_mistake_finish"
+    TEST_MISTAKE_SKIP = "test_mistake_skip"
+    TEST_BACK_TO_STAT_MENU = "test_back_to_stat_menu"
     
     @classmethod
     def get_plugin_entry(cls, plugin_code: str) -> str:
@@ -669,3 +685,70 @@ class TestPartCallbackData:
 
 # Алиас для совместимости (если где-то импортируется CallbackData)
 CallbackData = TestPartCallbackData
+
+
+# ---------------------------------------------------------------------------
+# Additional helper functions required by missing_handlers
+
+async def get_user_mistakes(user_id: int) -> List[Dict]:
+    """
+    Возвращает список ошибок пользователя для режима работы над ошибками.
+    
+    Args:
+        user_id: ID пользователя
+        
+    Returns:
+        Список словарей с информацией об ошибках
+    """
+    mistake_ids = await db.get_mistake_ids(user_id)
+    mistakes = []
+    
+    for q_id in mistake_ids:
+        # Находим данные вопроса
+        question_data = find_question_by_id(q_id)
+        
+        if question_data:
+            topic = question_data.get('topic', 'Неизвестная тема')
+            topic_name = TOPIC_NAMES.get(topic, topic)
+            q_type = question_data.get('type', 'unknown')
+            
+            # Определяем тип ошибки по типу вопроса
+            error_type_map = {
+                'single_choice': 'Неверный выбор',
+                'multiple_choice': 'Неполный/неверный выбор',
+                'matching': 'Неверное соответствие',
+                'sequence': 'Неверная последовательность',
+                'text_input': 'Неверный ответ'
+            }
+            
+            mistakes.append({
+                "question_id": q_id,
+                "topic": topic_name,
+                "error_type": error_type_map.get(q_type, "Неверный ответ"),
+                "timestamp": datetime.now().isoformat(),
+                "exam_number": question_data.get('exam_number')
+            })
+        else:
+            # Если вопрос не найден, добавляем с базовой информацией
+            mistakes.append({
+                "question_id": q_id,
+                "topic": "Вопрос не найден",
+                "error_type": "Неверный ответ",
+                "timestamp": datetime.now().isoformat()
+            })
+    
+    return mistakes
+
+
+def format_mistake_stats(mistakes: List[Dict]) -> str:
+    """Форматирует статистику ошибок в удобочитаемый текст."""
+    if not mistakes:
+        return "Нет ошибок для отображения"
+
+    lines = []
+    for idx, item in enumerate(mistakes, start=1):
+        lines.append(
+            f"{idx}. {item.get('topic', 'N/A')} – {item.get('error_type', 'N/A')}"
+        )
+
+    return "\n".join(lines)

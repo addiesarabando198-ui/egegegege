@@ -1,0 +1,341 @@
+{% extends "base.html" %}
+
+{% block title %}Учебная нагрузка{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1><i class="bi bi-list-check"></i> Учебная нагрузка</h1>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#workloadModal" onclick="openWorkloadModal()">
+        <i class="bi bi-plus-lg"></i> Добавить нагрузку
+    </button>
+</div>
+
+<!-- Фильтры -->
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-md-3">
+                <label class="form-label">Учитель</label>
+                <select class="form-select" id="filterTeacher" onchange="applyFilters()">
+                    <option value="">Все учителя</option>
+                    {% for teacher in teachers %}
+                    <option value="{{ teacher.id }}">{{ teacher.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Класс</label>
+                <select class="form-select" id="filterClass" onchange="applyFilters()">
+                    <option value="">Все классы</option>
+                    {% for cls in classes %}
+                    <option value="{{ cls.id }}">{{ cls.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Предмет</label>
+                <select class="form-select" id="filterSubject" onchange="applyFilters()">
+                    <option value="">Все предметы</option>
+                    {% for subject in subjects %}
+                    <option value="{{ subject.id }}">{{ subject.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3 d-flex align-items-end">
+                <button class="btn btn-outline-secondary w-100" onclick="clearFilters()">
+                    <i class="bi bi-x-lg"></i> Сбросить
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover" id="workloadTable">
+                <thead>
+                    <tr>
+                        <th>Учитель</th>
+                        <th>Предмет</th>
+                        <th>Класс</th>
+                        <th>Часов/нед</th>
+                        <th>Группа</th>
+                        <th width="120">Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for wl in workloads %}
+                    <tr data-teacher="{{ wl.teacher_id }}" data-class="{{ wl.class_id }}" data-subject="{{ wl.subject_id }}">
+                        <td>{{ wl.teacher.name }}</td>
+                        <td>
+                            <span class="badge" style="background-color: {{ wl.subject.color or '#6c757d' }}">
+                                {{ wl.subject.name }}
+                            </span>
+                        </td>
+                        <td><strong>{{ wl.school_class.name }}</strong></td>
+                        <td>{{ wl.hours_per_week }}</td>
+                        <td>
+                            {% if wl.is_group %}
+                            <span class="badge bg-info">Группа {{ wl.group_number }}</span>
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary" onclick="editWorkload({{ wl.id }})">
+                                <i class="bi bi-pencil"></i>
+                            </button>
+                            <button class="btn btn-sm btn-outline-danger" onclick="deleteWorkload({{ wl.id }})">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr id="emptyRow">
+                        <td colspan="6" class="text-center text-muted py-4">
+                            <i class="bi bi-inbox fs-1"></i>
+                            <p>Нет данных о нагрузке</p>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Сводка -->
+<div class="row mt-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-person"></i> Нагрузка по учителям</h6>
+            </div>
+            <div class="card-body" style="max-height: 300px; overflow-y: auto;">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Учитель</th>
+                            <th>Часов/нед</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for teacher in teachers %}
+                        {% set ns = namespace(total=0) %}
+                        {% for wl in workloads if wl.teacher_id == teacher.id %}
+                            {% set ns.total = ns.total + wl.hours_per_week %}
+                        {% endfor %}
+                        {% if ns.total > 0 %}
+                        <tr>
+                            <td>{{ teacher.name }}</td>
+                            <td><strong>{{ ns.total }}</strong></td>
+                        </tr>
+                        {% endif %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-mortarboard"></i> Нагрузка по классам</h6>
+            </div>
+            <div class="card-body" style="max-height: 300px; overflow-y: auto;">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Класс</th>
+                            <th>Часов/нед</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for cls in classes %}
+                        {% set ns = namespace(total=0) %}
+                        {% for wl in workloads if wl.class_id == cls.id %}
+                            {% set ns.total = ns.total + wl.hours_per_week %}
+                        {% endfor %}
+                        {% if ns.total > 0 %}
+                        <tr>
+                            <td>{{ cls.name }}</td>
+                            <td><strong>{{ ns.total }}</strong></td>
+                        </tr>
+                        {% endif %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Модальное окно -->
+<div class="modal fade" id="workloadModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="workloadModalTitle">Добавить нагрузку</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="workloadForm">
+                <div class="modal-body">
+                    <input type="hidden" id="workloadId">
+
+                    <div class="mb-3">
+                        <label class="form-label">Учитель <span class="text-danger">*</span></label>
+                        <select class="form-select" id="workloadTeacher" required>
+                            <option value="">— Выберите учителя —</option>
+                            {% for teacher in teachers %}
+                            <option value="{{ teacher.id }}">{{ teacher.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Предмет <span class="text-danger">*</span></label>
+                        <select class="form-select" id="workloadSubject" required>
+                            <option value="">— Выберите предмет —</option>
+                            {% for subject in subjects %}
+                            <option value="{{ subject.id }}">{{ subject.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Класс <span class="text-danger">*</span></label>
+                        <select class="form-select" id="workloadClass" required>
+                            <option value="">— Выберите класс —</option>
+                            {% for cls in classes %}
+                            <option value="{{ cls.id }}">{{ cls.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Часов в неделю</label>
+                            <input type="number" class="form-control" id="workloadHours" value="1" min="1" max="10">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <div class="form-check mt-4">
+                                <input class="form-check-input" type="checkbox" id="workloadIsGroup" onchange="toggleGroupNumber()">
+                                <label class="form-check-label" for="workloadIsGroup">
+                                    Деление на группы
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3" id="groupNumberBlock" style="display: none;">
+                        <label class="form-label">Номер группы</label>
+                        <select class="form-select" id="workloadGroupNumber">
+                            <option value="1">Группа 1</option>
+                            <option value="2">Группа 2</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Сохранить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const workloadModal = new bootstrap.Modal(document.getElementById('workloadModal'));
+
+function toggleGroupNumber() {
+    const isGroup = document.getElementById('workloadIsGroup').checked;
+    document.getElementById('groupNumberBlock').style.display = isGroup ? 'block' : 'none';
+}
+
+function openWorkloadModal() {
+    document.getElementById('workloadForm').reset();
+    document.getElementById('workloadId').value = '';
+    document.getElementById('workloadModalTitle').textContent = 'Добавить нагрузку';
+    document.getElementById('workloadHours').value = 1;
+    document.getElementById('groupNumberBlock').style.display = 'none';
+}
+
+function editWorkload(id) {
+    fetch(`/api/workloads/${id}`)
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('workloadId').value = data.id;
+            document.getElementById('workloadTeacher').value = data.teacher_id;
+            document.getElementById('workloadSubject').value = data.subject_id;
+            document.getElementById('workloadClass').value = data.class_id;
+            document.getElementById('workloadHours').value = data.hours_per_week;
+            document.getElementById('workloadIsGroup').checked = data.is_group;
+            document.getElementById('workloadGroupNumber').value = data.group_number || 1;
+            document.getElementById('groupNumberBlock').style.display = data.is_group ? 'block' : 'none';
+            document.getElementById('workloadModalTitle').textContent = 'Редактировать нагрузку';
+            workloadModal.show();
+        });
+}
+
+function deleteWorkload(id) {
+    if (confirm('Удалить эту нагрузку?')) {
+        fetch(`/api/workloads/${id}`, { method: 'DELETE' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) location.reload();
+                else alert(data.error);
+            });
+    }
+}
+
+document.getElementById('workloadForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const id = document.getElementById('workloadId').value;
+    const method = id ? 'PUT' : 'POST';
+    const url = id ? `/api/workloads/${id}` : '/api/workloads';
+    const isGroup = document.getElementById('workloadIsGroup').checked;
+
+    fetch(url, {
+        method: method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            teacher_id: parseInt(document.getElementById('workloadTeacher').value),
+            subject_id: parseInt(document.getElementById('workloadSubject').value),
+            class_id: parseInt(document.getElementById('workloadClass').value),
+            hours_per_week: parseInt(document.getElementById('workloadHours').value),
+            is_group: isGroup,
+            group_number: isGroup ? parseInt(document.getElementById('workloadGroupNumber').value) : null
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.id) location.reload();
+        else alert(data.error);
+    });
+});
+
+function applyFilters() {
+    const teacherId = document.getElementById('filterTeacher').value;
+    const classId = document.getElementById('filterClass').value;
+    const subjectId = document.getElementById('filterSubject').value;
+
+    const rows = document.querySelectorAll('#workloadTable tbody tr[data-teacher]');
+    rows.forEach(row => {
+        const matchTeacher = !teacherId || row.dataset.teacher === teacherId;
+        const matchClass = !classId || row.dataset.class === classId;
+        const matchSubject = !subjectId || row.dataset.subject === subjectId;
+        row.style.display = (matchTeacher && matchClass && matchSubject) ? '' : 'none';
+    });
+}
+
+function clearFilters() {
+    document.getElementById('filterTeacher').value = '';
+    document.getElementById('filterClass').value = '';
+    document.getElementById('filterSubject').value = '';
+    applyFilters();
+}
+</script>
+{% endblock %}

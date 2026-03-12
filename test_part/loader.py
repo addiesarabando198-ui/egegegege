@@ -347,3 +347,8 @@ def get_questions_dict_flat() -> Optional[Dict[str, Dict[str, Any]]]:
     if QUESTIONS_DICT_FLAT is None:
         logger.warning("Попытка доступа к QUESTIONS_DICT_FLAT до загрузки.")
     return QUESTIONS_DICT_FLAT
+# Автоматическая загрузка при импорте модуля
+# Это гарантирует, что QUESTIONS_DATA будет инициализирован
+if QUESTIONS_DATA is None:
+    logger.info("Auto-loading questions on module import...")
+    load_questions()

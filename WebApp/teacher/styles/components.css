@@ -1,0 +1,394 @@
+/**
+ * Стили для UI компонентов (браузер вопросов, выбор учеников и т.д.)
+ */
+
+/* ============================================
+   QUESTION BROWSER
+   ============================================ */
+.question-browser {
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-md);
+}
+
+.browser-controls {
+  display: flex;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+  flex-wrap: wrap;
+}
+
+.browser-controls input[type="search"] {
+  flex: 1;
+  min-width: 200px;
+}
+
+.browser-controls select {
+  padding: 8px 12px;
+  background: var(--tg-bg);
+  color: var(--tg-text);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.question-list {
+  max-height: 400px;
+  overflow-y: auto;
+  margin-bottom: var(--spacing-md);
+}
+
+.question-card {
+  background: var(--tg-bg);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  margin-bottom: var(--spacing-sm);
+  display: flex;
+  gap: var(--spacing-md);
+  align-items: flex-start;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  border: 2px solid transparent;
+}
+
+.question-card:hover {
+  transform: translateX(2px);
+  box-shadow: var(--shadow-sm);
+}
+
+.question-card.selected {
+  border-color: var(--tg-button);
+  background: rgba(36, 129, 204, 0.05);
+}
+
+.question-card input[type="checkbox"] {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.question-content {
+  flex: 1;
+}
+
+.question-number {
+  display: inline-block;
+  background: var(--tg-button);
+  color: var(--tg-button-text);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--spacing-xs);
+}
+
+.question-text {
+  font-size: 0.95rem;
+  margin-bottom: var(--spacing-xs);
+  line-height: 1.4;
+}
+
+.question-topic {
+  font-size: 0.85rem;
+  color: var(--tg-hint);
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md) 0;
+}
+
+.pagination button {
+  padding: 8px 16px;
+  background: var(--tg-bg);
+  border-radius: var(--radius-md);
+  transition: all var(--transition-fast);
+}
+
+.pagination button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pagination button:not(:disabled):hover {
+  background: var(--tg-button);
+  color: var(--tg-button-text);
+}
+
+.browser-info {
+  padding: var(--spacing-sm);
+  background: var(--tg-bg);
+  border-radius: var(--radius-md);
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+.browser-info strong {
+  color: var(--tg-button);
+  font-weight: 600;
+}
+
+/* ============================================
+   STUDENT SELECTOR
+   ============================================ */
+.student-selector {
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-md);
+}
+
+.quick-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+}
+
+.quick-actions button {
+  flex: 1;
+  padding: 8px;
+  background: var(--tg-bg);
+  border-radius: var(--radius-md);
+  font-size: 0.9rem;
+  transition: all var(--transition-fast);
+}
+
+.quick-actions button:hover {
+  background: var(--tg-button);
+  color: var(--tg-button-text);
+}
+
+.student-list {
+  max-height: 400px;
+  overflow-y: auto;
+  margin-bottom: var(--spacing-md);
+}
+
+.student-card {
+  background: var(--tg-bg);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  margin-bottom: var(--spacing-sm);
+  display: flex;
+  gap: var(--spacing-md);
+  align-items: center;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  border: 2px solid transparent;
+}
+
+.student-card:hover {
+  transform: translateX(2px);
+  box-shadow: var(--shadow-sm);
+}
+
+.student-card.selected {
+  border-color: var(--tg-button);
+  background: rgba(36, 129, 204, 0.05);
+}
+
+.student-card input[type="checkbox"] {
+  flex-shrink: 0;
+}
+
+.student-info {
+  flex: 1;
+}
+
+.student-name {
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.student-username {
+  font-size: 0.85rem;
+  color: var(--tg-hint);
+}
+
+.student-stats {
+  display: flex;
+  gap: var(--spacing-md);
+  font-size: 0.85rem;
+  color: var(--tg-hint);
+  margin-top: var(--spacing-xs);
+}
+
+.selector-info {
+  padding: var(--spacing-sm);
+  background: var(--tg-bg);
+  border-radius: var(--radius-md);
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+.selector-info strong {
+  color: var(--tg-button);
+  font-weight: 600;
+}
+
+/* ============================================
+   MODULE SELECTOR (для смешанных заданий)
+   ============================================ */
+.module-selector {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.module-item {
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  border: 2px solid transparent;
+  transition: all var(--transition-fast);
+}
+
+.module-item.selected {
+  border-color: var(--tg-button);
+}
+
+.module-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+}
+
+.module-header input[type="checkbox"] {
+  flex-shrink: 0;
+}
+
+.module-title {
+  flex: 1;
+  font-weight: 500;
+}
+
+.module-count {
+  font-size: 0.85rem;
+  color: var(--tg-hint);
+}
+
+.module-details {
+  padding-left: 32px;
+  display: none;
+}
+
+.module-item.selected .module-details {
+  display: block;
+}
+
+.module-details .form-group {
+  margin-bottom: var(--spacing-md);
+}
+
+.module-details label {
+  font-size: 0.9rem;
+}
+
+/* ============================================
+   PREVIEW (предпросмотр задания)
+   ============================================ */
+.preview-info {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-lg);
+}
+
+.info-item {
+  background: var(--tg-secondary-bg);
+  padding: var(--spacing-md);
+  border-radius: var(--radius-md);
+}
+
+.info-item .label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--tg-hint);
+  margin-bottom: var(--spacing-xs);
+}
+
+.info-item .value {
+  font-weight: 500;
+  font-size: 1.1rem;
+}
+
+.preview-questions h4 {
+  font-size: 1rem;
+  margin-bottom: var(--spacing-md);
+}
+
+.preview-questions ul {
+  list-style: none;
+  padding: 0;
+}
+
+.preview-questions li {
+  padding: var(--spacing-sm) 0;
+  border-bottom: 1px solid var(--tg-secondary-bg);
+}
+
+.preview-questions li:last-child {
+  border-bottom: none;
+}
+
+/* ============================================
+   EMPTY STATE
+   ============================================ */
+.empty-state {
+  text-align: center;
+  padding: var(--spacing-xl);
+  color: var(--tg-hint);
+}
+
+.empty-state-icon {
+  font-size: 3rem;
+  margin-bottom: var(--spacing-md);
+  opacity: 0.5;
+}
+
+.empty-state-text {
+  font-size: 1rem;
+  margin-bottom: var(--spacing-sm);
+}
+
+.empty-state-hint {
+  font-size: 0.9rem;
+}
+
+/* ============================================
+   BADGES
+   ============================================ */
+.badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.badge-primary {
+  background: var(--tg-button);
+  color: var(--tg-button-text);
+}
+
+.badge-success {
+  background: var(--color-success);
+  color: white;
+}
+
+.badge-error {
+  background: var(--color-error);
+  color: white;
+}
+
+.badge-warning {
+  background: var(--color-warning);
+  color: white;
+}
+
+.badge-info {
+  background: var(--color-info);
+  color: white;
+}

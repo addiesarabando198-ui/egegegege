@@ -3,30 +3,9 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 from core.ai_service import get_ai_service
+from core.types import EvaluationResult, TaskRequirements, EvaluationCriteria
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class TaskRequirements:
-    """Требования к заданию ЕГЭ"""
-    task_number: int
-    task_name: str
-    max_score: int
-    criteria: List[Dict[str, Any]]
-    description: str
-
-
-@dataclass
-class EvaluationResult:
-    """Результат проверки задания"""
-    scores: Dict[str, int]  # Баллы по критериям
-    total_score: int
-    max_score: int
-    feedback: str
-    detailed_analysis: Dict[str, Any]
-    suggestions: List[str]
-    factual_errors: List[Dict[str, str]]
 
 
 class BaseAIEvaluator(ABC):
@@ -108,11 +87,12 @@ class BaseAIEvaluator(ABC):
         """Форматирование критериев для промпта"""
         criteria_text = []
         for criterion in self.requirements.criteria:
-            name = criterion['name']
-            max_score = criterion['max_score']
-            description = criterion['description']
+            # Теперь criterion это EvaluationCriteria (dataclass), обращаемся к атрибутам
+            name = criterion.name
+            max_score = criterion.max_score
+            description = criterion.description
             criteria_text.append(f"{name} (макс. {max_score} балла): {description}")
-        
+
         return "\n".join(criteria_text)
 
 
@@ -126,11 +106,12 @@ class Task19Evaluator(BaseAIEvaluator):
             task_name="Примеры социальных объектов",
             max_score=3,
             criteria=[
-                {
-                    "name": "К1",
-                    "max_score": 3,
-                    "description": "Правильность примеров (по 1 баллу за каждый корректный пример)"
-                }
+                EvaluationCriteria(
+                    code="К1",
+                    name="К1",
+                    max_score=3,
+                    description="Правильность примеров (по 1 баллу за каждый корректный пример)"
+                )
             ],
             description="Приведите три примера, иллюстрирующих..."
         )
@@ -179,11 +160,11 @@ class Task19Evaluator(BaseAIEvaluator):
             if not result:
                 # Fallback оценка
                 return EvaluationResult(
-                    scores={"К1": 1},
+                    criteria_scores={"К1": 1},
                     total_score=1,
                     max_score=3,
                     feedback="Не удалось полностью проверить ответ. Требуется проверка преподавателем.",
-                    detailed_analysis={},
+                    detailed_feedback={},
                     suggestions=[],
                     factual_errors=[]
                 )
@@ -198,11 +179,11 @@ class Task19Evaluator(BaseAIEvaluator):
                 result.get("main_issues", [])
             )
             return EvaluationResult(
-                scores={"К1": result.get("score", 0)},
+                criteria_scores={"К1": result.get("score", 0)},
                 total_score=result.get("score", 0),
                 max_score=3,
                 feedback=feedback,
-                detailed_analysis=result,
+                detailed_feedback=result,
                 suggestions=result.get("suggestions", []),
                 factual_errors=factual_errors
             )
@@ -218,11 +199,12 @@ class Task20Evaluator(BaseAIEvaluator):
             task_name="Формулирование суждений",
             max_score=3,
             criteria=[
-                {
-                    "name": "К1",
-                    "max_score": 3,
-                    "description": "Корректность суждений (по 1 баллу за каждое)"
-                }
+                EvaluationCriteria(
+                    code="К1",
+                    name="К1",
+                    max_score=3,
+                    description="Корректность суждений (по 1 баллу за каждое)"
+                )
             ],
             description="Сформулируйте три суждения о..."
         )
@@ -282,22 +264,22 @@ class Task20Evaluator(BaseAIEvaluator):
             )
 
             return EvaluationResult(
-                scores={"К1": result.get("score", 0)},
+                criteria_scores={"К1": result.get("score", 0)},
                 total_score=result.get("score", 0),
                 max_score=3,
                 feedback=feedback,
-                detailed_analysis=result,
+                detailed_feedback=result,
                 suggestions=result.get("suggestions", []),
                 factual_errors=factual_errors
             )
     
     def _get_fallback_result(self) -> EvaluationResult:
         return EvaluationResult(
-            scores={"К1": 1},
+            criteria_scores={"К1": 1},
             total_score=1,
             max_score=3,
             feedback="Требуется дополнительная проверка преподавателем.",
-            detailed_analysis={},
+            detailed_feedback={},
             suggestions=["Убедитесь, что каждое суждение раскрывает отдельный аспект темы"],
             factual_errors=[]
         )
@@ -313,16 +295,18 @@ class Task25Evaluator(BaseAIEvaluator):
             task_name="Обоснование и примеры",
             max_score=6,
             criteria=[
-                {
-                    "name": "К1",
-                    "max_score": 2,
-                    "description": "Обоснование (объяснение, аргументация)"
-                },
-                {
-                    "name": "К2", 
-                    "max_score": 4,
-                    "description": "Примеры из различных источников (до 2 баллов за каждый)"
-                }
+                EvaluationCriteria(
+                    code="К1",
+                    name="К1",
+                    max_score=2,
+                    description="Обоснование (объяснение, аргументация)"
+                ),
+                EvaluationCriteria(
+                    code="К2",
+                    name="К2",
+                    max_score=4,
+                    description="Примеры из различных источников (до 2 баллов за каждый)"
+                )
             ],
             description="Обоснуйте необходимость... Приведите три примера..."
         )
@@ -402,22 +386,22 @@ class Task25Evaluator(BaseAIEvaluator):
             feedback = await self.generate_feedback(answer, scores, result.get("main_issues", []))
 
             return EvaluationResult(
-                scores=scores,
+                criteria_scores=scores,
                 total_score=result.get("total_score", 0),
                 max_score=6,
                 feedback=feedback,
-                detailed_analysis=result,
+                detailed_feedback=result,
                 suggestions=result.get("suggestions", []),
                 factual_errors=factual_errors
             )
-    
+
     def _get_fallback_result(self) -> EvaluationResult:
         return EvaluationResult(
-            scores={"К1": 1, "К2": 2},
+            criteria_scores={"К1": 1, "К2": 2},
             total_score=3,
             max_score=6,
             feedback="Требуется дополнительная проверка.",
-            detailed_analysis={},
+            detailed_feedback={},
             suggestions=["Убедитесь, что примеры из разных источников"],
             factual_errors=[]
         )
